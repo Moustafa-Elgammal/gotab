@@ -21,9 +21,10 @@ before committing tens of thousands of lines. **A failed gate is a successful ph
       in one cgo call. Inside budget. See D5 — the cold cost must be paid at launch, not first summon.
 - [!] **P0.4** Thumbnail hold/release — **BLOCKED, split.** The naive instruments are blind to CoreGraphics
       memory: 366 MB of bitmaps showed as ~8 MB of growth. See D4.
-  - [ ] **P0.4a** Build a trustworthy memory instrument — `vmmap` regions / `footprint` CLI / Instruments —
-        acceptance: **it reports ~366 MB for `spike/memory` as it stands.** Nothing else in this project is
-        credible until this passes.
+  - [x] **P0.4a** Build a trustworthy memory instrument — `vmmap` regions / `footprint` CLI / Instruments —
+        **DONE (D8):** the instrument is `vmmap --summary` -> the `CG raster data` row plus
+        `Physical footprint (peak)`. Reports 368.8 MB / 374.4 MB peak against 366.2 MB declared.
+        Implemented in `spike/memprobe`. D4's "instruments are blind" conclusion was wrong.
   - [ ] **P0.4b** Re-run hold/release against real ScreenCaptureKit output, using P0.4a's instrument
 - [ ] **P0.6** ScreenCaptureKit capture prototype — `spike/sck` — CGWindowListCreateImage is gone (D3); this
       is the highest-risk unknown in the whole port and belongs in Phase 0, not Phase 2
@@ -118,3 +119,11 @@ Append one line per session. Newest last. This is how a cold session learns what
   primary goal has no baseline.**
   **Next session: start with P0.4a (`docs/tasks/P0.4a.md`), then P0.7.** Those two together decide whether
   the memory premise holds; everything else is downstream of that answer.
+- `2026-09-06` — **P0.4a done.** Built `spike/memprobe`, which tested three hypotheses and rejected all of
+  them before finding the real answer: `vmmap` has a dedicated `CG raster data` region that accounts our
+  bitmaps exactly (368.8 MB of 366.2 MB declared), and `Physical footprint (peak)` caught the true
+  374.4 MB high-water mark. Instantaneous `phys_footprint` misses it because macOS reclaims idle CG raster
+  pages. Corrected D4 in D8.
+  **D9 is the uncomfortable part: macOS already evicts idle thumbnails, so the bounded-LRU win may be
+  small.** That makes P0.7 (measure AltTab) the deciding task — do it before designing the cache.
+  **Next session: P0.7.**

@@ -65,9 +65,14 @@ The rules:
    backstop for leak detection in debug builds, **never** the primary mechanism — finalizers run at GC's
    convenience, which is exactly the problem we're solving.
 3. **The cache is bounded and that bound is a number, not a hope.** A fixed-capacity LRU keyed by window id.
-   AltTab retains one thumbnail per window indefinitely; our win comes from *this policy*, not from Go.
+   AltTab retains one thumbnail per window indefinitely; any win comes from *this policy*, not from Go.
+   **But see D9:** macOS already reclaims idle CG raster pages on its own, so the steady-state win over
+   "retain everything" is unquantified until P0.7 measures AltTab. Bound the cache for peak footprint and
+   fault-in latency, not on an assumption about resident size.
 4. **Thumbnails are downscaled at capture time**, never captured full-res then shrunk.
-5. **Every phase gate measures RSS.** A phase that raises steady-state RSS does not merge.
+5. **Every phase gate measures memory with D8's instrument** — `vmmap --summary` -> `CG raster data`, plus
+   `Physical footprint (peak)`. Never instantaneous `phys_footprint`: it silently under-reports bitmaps
+   (that mistake produced D4). Measurement is order-sensitive; reading pixels faults pages back in.
 
 ## Threading
 

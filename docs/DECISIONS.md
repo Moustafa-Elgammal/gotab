@@ -120,3 +120,57 @@ and the observability ceilings that cannot be engineered around.
 
 Read it before designing any subsystem. It is the cheapest way to avoid re-deriving several years of
 reverse-engineering, and it names its sources so each claim can be verified against the AltTab tree.
+
+## D8 · P0.4a RESOLVED — the instrument is `vmmap`, and D4 was wrong — 2026-09-06
+
+D4 concluded the instruments were blind to CoreGraphics memory. That was wrong, and the correction
+matters more than the original finding.
+
+**What was tested.** 200 CGImages of 800x600 RGBA (366.2 MB declared), against three hypotheses:
+
+| hypothesis | verdict | evidence |
+|---|---|---|
+| H1 the bytes are never allocated | **rejected** | 0 of 200 contexts returned a NULL data pointer; 366.2 MB written byte-by-byte; `CGDataProviderCopyData` returns 366.2 MB whose content checksum is real noise, not zeros |
+| H2 the instruments cannot see them | **rejected** | `task_info` phys, `vmmap` resident and `vmmap` dirty all agree within 0.1 MB |
+| H3 identical pages are compressed away | **rejected** | identical and unique bitmap content behave the same; `compressed` stays 0.0 MB |
+
+**The actual explanation.** `vmmap --summary` has a dedicated region type for exactly this:
+
+```
+Physical footprint:         11.9M
+Physical footprint (peak):  374.4M
+CG raster data     VIRTUAL 368.8M   RESIDENT (varies)   DIRTY (varies)
+```
+
+The bitmaps were fully resident — peak footprint 374.4 MB against 366.2 MB declared. **macOS reclaims
+idle CG raster pages aggressively and faults them back in on access**, so an instantaneous
+`phys_footprint` reading taken while the images sit untouched reports almost nothing. Reading the pixels
+immediately before measuring showed `CG raster data` resident at the full 368.8 MB; measuring without
+touching them showed 6.4 MB. Same images, same process — only the access pattern differed.
+
+**The instrument, for anyone measuring memory in this project:**
+
+1. `vmmap --summary <pid>` → the **`CG raster data`** row. Its VIRTUAL size is stable and accurate.
+2. **`Physical footprint (peak)`** — the true high-water mark.
+3. **Not** instantaneous `phys_footprint` or `resident_size`. Both are legitimate numbers that answer a
+   different question, and using them here produces the D4 mistake.
+
+Implemented in `spike/memprobe`. Note the measurement is order-sensitive: anything that reads the pixels
+faults the pages back in, so measure before touching, and say which you did.
+
+## D9 · The memory premise is weaker than assumed — 2026-09-06
+
+Direct consequence of D8, and it deserves its own entry because it bears on why this project exists.
+
+**macOS already evicts idle thumbnail pages.** AltTab retains one `CALayerContents` per window
+indefinitely (`Window.swift:40`), and GoTab planned to beat that with a bounded LRU. But the OS is
+already doing a form of that eviction for free: an untouched 366 MB of CG raster data sat at ~6 MB
+resident without any policy from us.
+
+So a bounded LRU would reduce *virtual* size and *peak* footprint, but the steady-state resident win over
+"retain everything and let macOS reclaim" may be small. It is still worth doing — peak footprint is real,
+eviction under pressure has a latency cost when pages fault back in during a summon, and unbounded growth
+is a genuine risk with many windows — but **the size of the win is now an open question, not a given.**
+
+**This raises the stakes on P0.7.** Until AltTab's real footprint is measured with D8's instrument, we do
+not know whether the headline goal has meaningful room in it. Do P0.7 before designing the cache.
