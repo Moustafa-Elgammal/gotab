@@ -70,7 +70,12 @@ enum {
 // flag bits here. core.WindowFlags is frozen in internal/core/api.go and defining a second copy of
 // those values in C is exactly the drift AGENTS.md warns about, so C reports facts (is it on screen,
 // what layer, what alpha) and Go decides what they mean.
-typedef struct {
+// The struct tag is not decoration. A tagless `typedef struct {...} gt_window` makes cgo synthesize
+// an anonymous type and alias to it -- `type _Ctype_gt_window = _Ctype_struct___0` -- and the number
+// is positional, so adding another anonymous struct above renumbers it. Go itself follows the alias
+// fine; IDEs resolve the alias and then fail on every field access, and the name is unstable besides.
+// Naming the tag makes cgo emit _Ctype_struct_gt_window instead.
+typedef struct gt_window {
     uint32_t id;         // CGWindowID. Not reuse-safe -- see core.WindowID.
     int32_t pid;         // owning process
     uint32_t layer;      // kCGWindowLayer. 0 is an ordinary window; see gt_window_list.

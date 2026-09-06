@@ -12,7 +12,7 @@ enum {
 };
 
 // One captured keystroke.
-typedef struct {
+typedef struct hk_sample {
     // CGEventGetTimestamp -> our callback entry. What the 5 ms budget is about. SIGNED on purpose:
     // a synthetic event carries a timestamp stamped at post time on the posting thread, so this
     // comes out at or below zero and is meaningless. Only a real keypress measures the HID path,

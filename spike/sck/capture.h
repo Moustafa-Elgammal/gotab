@@ -14,7 +14,7 @@ enum {
     SCK_TIMEOUT = 5       // the completion handler never fired
 };
 
-typedef struct {
+typedef struct sck_result {
     CGImageRef image;   // caller owns it; release with sck_release
     int64_t bytes;      // bytes_per_row * height, the real backing store size
     int32_t width;

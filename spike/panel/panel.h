@@ -15,7 +15,7 @@ enum {
 // The three exist because they are not the same number and the difference is the finding: AppKit
 // returning from an order-front call says nothing about pixels (ALTTAB-LESSONS section 5 -
 // CoreAnimation commits at the end of the runloop turn).
-typedef struct {
+typedef struct panel_sample {
     double call_ms;    // makeKeyAndOrderFront returned
     double draw_ms;    // drawRect: actually ran - 0 if the frame was served from the backing store
     double commit_ms;  // the CATransaction completion block fired - handed to the render server
