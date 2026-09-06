@@ -36,6 +36,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
+	"strconv"
+	"strings"
 	"time"
 	"unsafe"
 )
@@ -73,7 +76,187 @@ func captureMany(ids []uint32, w, h, timeoutMS int32) ([]C.sck_result, time.Dura
 	return unsafe.Slice(res, n), d
 }
 
+// vmstat is the P0.4b instrument, pointed at this process.
+//
+// spike/procmem is the general version and reads the same four rows; this is a deliberate third copy
+// of the parsing, for the same reason procmem duplicates memprobe's: spikes are throwaway probes, not
+// a library. Sampling from inside is not a convenience here, it is required — a capture/release cycle
+// is ~50 ms and an external sampler cannot be told when a cycle boundary happened, so it would read
+// the middle of one. From in here every sample is taken with zero images held, by construction.
+type vmstat struct {
+	ioVirtual, ioResident int64
+	cgVirtual             int64
+	footprint, peak       int64
+}
+
+func parseSize(s string) int64 {
+	if s == "" {
+		return 0
+	}
+	mult := int64(1)
+	switch s[len(s)-1] {
+	case 'K':
+		mult, s = 1<<10, s[:len(s)-1]
+	case 'M':
+		mult, s = 1<<20, s[:len(s)-1]
+	case 'G':
+		mult, s = 1<<30, s[:len(s)-1]
+	}
+	f, err := strconv.ParseFloat(s, 64)
+	if err != nil {
+		return 0
+	}
+	return int64(f * float64(mult))
+}
+
+func readVM() (vmstat, error) {
+	var v vmstat
+	out, err := exec.Command("vmmap", "--summary", strconv.Itoa(os.Getpid())).CombinedOutput()
+	if err != nil {
+		return v, fmt.Errorf("vmmap: %w\n%s", err, strings.TrimSpace(string(out)))
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		t := strings.TrimSpace(l)
+		switch {
+		case strings.HasPrefix(t, "Physical footprint (peak):"):
+			v.peak = parseSize(strings.TrimSpace(strings.TrimPrefix(t, "Physical footprint (peak):")))
+		case strings.HasPrefix(t, "Physical footprint:"):
+			v.footprint = parseSize(strings.TrimSpace(strings.TrimPrefix(t, "Physical footprint:")))
+		case strings.HasPrefix(t, "CG raster data"):
+			if f := strings.Fields(strings.TrimPrefix(t, "CG raster data")); len(f) >= 2 {
+				v.cgVirtual = parseSize(f[0])
+			}
+		case strings.HasPrefix(t, "IOSurface"):
+			// Columns: VIRTUAL RESIDENT DIRTY SWAPPED VOLATILE NONVOL EMPTY COUNT.
+			if f := strings.Fields(t); f[0] == "IOSurface" && len(f) >= 3 {
+				v.ioVirtual, v.ioResident = parseSize(f[1]), parseSize(f[2])
+			}
+		}
+	}
+	return v, nil
+}
+
+// runCycles is P0.4b: capture and release n times, and see whether anything is left behind.
+//
+// The acceptance criterion is no net growth, but "growth from the very first sample" is the wrong
+// reading and would fail a healthy process: the first capture brings up ScreenCaptureKit, its XPC
+// connection and the shared surface pool, and none of that is a leak. So two numbers are reported —
+// growth including that one-off warm-up, and growth after it, which is the one that means anything.
+// A leak of one thumbnail per cycle would be tens of MB by cycle 100 and cannot hide in either.
+//
+// It ends with a positive control, because "no growth" and "measuring the wrong row" print the same
+// zeros. See the comment on that block.
+func runCycles(ids []uint32, n, tile, timeoutMS int) {
+	const (
+		warmup      = 10 // cycles charged to framework start-up rather than to the steady state
+		controlHold = 20 // images held at once by the positive control, after the cycles are done
+	)
+
+	fmt.Printf("\nP0.4b — %d capture/release cycles, rotating over %d window(s).\n", n, len(ids))
+	fmt.Printf("Numbered rows are sampled with zero images held, so a rising IOSurface row is a leak.\n")
+	fmt.Printf("The two rows after them are the control, and hold images on purpose.\n\n")
+	fmt.Printf("%7s  %19s  %10s  %19s\n", "", "IOSurface", "CG raster", "footprint")
+	fmt.Printf("%7s  %9s %9s  %10s  %9s %9s\n", "cycle", "virtual", "resident", "virtual", "now", "peak")
+
+	samples := map[string]vmstat{}
+	sample := func(label string) (vmstat, bool) {
+		v, err := readVM()
+		if err != nil {
+			fmt.Printf("%7s  -- unreadable: %v\n", label, err)
+			return v, false
+		}
+		samples[label] = v
+		fmt.Printf("%7s  %8.1fM %8.1fM  %9.1fM  %8.1fM %8.1fM\n", label,
+			mb(v.ioVirtual), mb(v.ioResident), mb(v.cgVirtual), mb(v.footprint), mb(v.peak))
+		return v, true
+	}
+	cycleSample := func(c int) { sample(strconv.Itoa(c)) }
+
+	every := n / 10
+	if every < 1 {
+		every = 1
+	}
+	cycleSample(0)
+
+	failed := 0
+	for i := 1; i <= n; i++ {
+		r, _ := capture(ids[(i-1)%len(ids)], int32(tile), int32(tile), int32(timeoutMS))
+		if r.err != C.SCK_OK {
+			// D12 saw one capture time out unreproducibly in ~10 runs. That is SCK being SCK; it
+			// must not abort a 100-cycle run, but it does have to be counted and reported.
+			failed++
+			continue
+		}
+		C.sck_release(r.image)
+		if i == warmup || i%every == 0 || i == n {
+			cycleSample(i)
+		}
+	}
+
+	fmt.Printf("\n%d cycles completed, %d captures failed\n", n-failed, failed)
+
+	first, haveFirst := samples[strconv.Itoa(0)]
+	last, haveLast := samples[strconv.Itoa(n)]
+	base, haveBase := samples[strconv.Itoa(warmup)]
+	if !haveFirst || !haveLast || !haveBase {
+		// Differencing a missing sample against a real one would read as a confident several-hundred-MB
+		// swing in whichever direction the gap happens to fall. Refuse instead.
+		fmt.Println("INCONCLUSIVE: a sample needed for the comparison was not readable")
+		return
+	}
+	fmt.Printf("including framework warm-up (cycle 0 -> %d): IOSurface %+.1f MB, footprint %+.1f MB\n",
+		n, mb(last.ioVirtual-first.ioVirtual), mb(last.footprint-first.footprint))
+	growth := last.ioVirtual - base.ioVirtual
+	fmt.Printf("steady state    (cycle %d -> %d): IOSurface %+.1f MB, footprint %+.1f MB\n",
+		warmup, n, mb(growth), mb(last.footprint-base.footprint))
+
+	// The positive control, and the reason this run is allowed to conclude anything at all.
+	//
+	// Every numbered row above reads 0.0M, which is what a clean release looks like — and is also
+	// exactly what a blind instrument looks like. That is not a hypothetical: D12's finding was that
+	// P0.4a's instrument watched a row SCK output never touches, and cheerfully reported a leak-free
+	// 7 MB process that was holding 330 MB. So hold thumbnails deliberately and require the row to
+	// move. If it does not, the no-growth result above is measuring nothing, whatever its deltas say.
+	imgs := make([]C.CGImageRef, 0, controlHold)
+	var declared int64
+	for i := 0; i < controlHold; i++ {
+		r, _ := capture(ids[i%len(ids)], int32(tile), int32(tile), int32(timeoutMS))
+		if r.err != C.SCK_OK {
+			continue
+		}
+		imgs = append(imgs, r.image)
+		declared += int64(r.bytes)
+	}
+	held, okHeld := sample("held")
+	for _, im := range imgs {
+		C.sck_release(im)
+	}
+	freed, okFreed := sample("freed")
+
+	moved := held.ioVirtual - last.ioVirtual
+	fmt.Printf("\ncontrol: %d images held, %.1f MB declared — IOSurface %+.1f MB, then %+.1f MB on release\n",
+		len(imgs), mb(declared), mb(moved), mb(freed.ioVirtual-held.ioVirtual))
+
+	switch {
+	case failed > 0 && n-failed < n/2:
+		fmt.Printf("\nINCONCLUSIVE: only %d of %d cycles actually captured anything\n", n-failed, n)
+	case len(imgs) == 0 || !okHeld || !okFreed:
+		fmt.Println("\nINCONCLUSIVE: the control could not be taken, so the instrument is unproven here")
+	case moved <= 0:
+		fmt.Printf("\nINCONCLUSIVE: holding %d images (%.1f MB declared) did not move the IOSurface row.\n",
+			len(imgs), mb(declared))
+		fmt.Println("  This instrument cannot see ScreenCaptureKit output — the same way P0.4a's could not")
+		fmt.Println("  (D12) — so the no-growth result above says nothing about leaks.")
+	case growth > 0:
+		fmt.Printf("\nLEAK: IOSurface grew %.1f MB over %d cycles after warm-up\n", mb(growth), n-warmup)
+	default:
+		fmt.Printf("\nPASS: no IOSurface growth across %d cycles after warm-up (%+.1f MB)\n",
+			n-warmup, mb(growth))
+	}
+}
+
 func main() {
+	cycles := flag.Int("cycles", 0, "P0.4b: capture/release N times and check for growth, then exit")
 	hold := flag.Int("hold", 0, "capture N thumbnails and hold them, for external measurement")
 	tile := flag.Int("tile", 400, "max thumbnail edge in pixels")
 	timeout := flag.Int("timeout", 10000, "ms to wait for each completion handler")
@@ -107,6 +290,13 @@ func main() {
 	if nw == 0 {
 		fmt.Println("\nno capturable window on screen — open a normal window and re-run")
 		os.Exit(1)
+	}
+
+	if *cycles > 0 {
+		// Before the timing steps below, not after: their captures would land in the cycle-0
+		// baseline and hide exactly the growth this is looking for.
+		runCycles(ids, *cycles, *tile, *timeout)
+		return
 	}
 
 	// Step 2: one capture, cold. This is the number that includes framework warm-up.

@@ -100,3 +100,10 @@ A task is done when, and only when:
 4. Anything surprising is appended to `docs/DECISIONS.md`
 
 Step 3 is what makes a cold session resumable. Skipping it is how this project gets lost.
+
+**Since D16, step 1 no longer includes writing tests or taking a measurement.** Verification is batched
+into Phase 6, so a Phase 2–5 task contract's acceptance is "the code exists and does X", and step 2 means
+the gate is still green on the suite that already exists — not that the task added to it. Two things that
+did not become optional: a decision a deferred test would have caught is tagged **`assumption`** in
+`docs/ROADMAP.md` pointing at its V6 task, and a box is never `[x]` on a number nobody believes. P0.2 is
+the worked example — complete code, no number, deliberately still `[~]`.

@@ -386,3 +386,124 @@ appear *over* a full-screen app rather than behind it. Neither was actually test
 and switching Spaces cannot be driven synthetically here (TCC blocks synthetic keystrokes, the same wall
 P0.7 hit). **The settings are prior art from AltTab, not a measurement**, and they are recorded as such.
 This is the one open question P0.1 leaves behind, and full-screen is where switchers most often fail.
+
+---
+
+## D14 · P0.4b RESOLVED — thumbnails release cleanly, and the instrument is proven, not assumed — 2026-09-06
+
+`spike/sck -cycles 100`, macOS 26.6.2, 9 shareable windows rotated through, 400 px tiles. Every numbered
+sample is taken with **zero images held**, so anything left in the IOSurface row is a leak.
+
+| | IOSurface virtual | footprint |
+|---|---|---|
+| cycle 0 → 100, including framework warm-up | **+0.0 MB** | +2.3 MB |
+| cycle 10 → 100, steady state | **+0.0 MB** | +0.4 MB |
+
+100 cycles, 0 captures failed. **P0.4b's criterion — no growth across 100 capture/release cycles — holds.**
+The ~2 MB of footprint drift is the Go heap and SCK's XPC machinery coming up over the first ten cycles,
+not surfaces: the surface row never moves off zero at all.
+
+**The zeros are only worth something because of the control, and that is the actual finding here.** A row
+that reads 0.0M on every sample is what a clean release looks like *and* what a blind instrument looks
+like — the two are indistinguishable from the deltas alone. That is not a hypothetical worry: D12's whole
+result was that P0.4a's instrument watched `CG raster data`, which SCK output never touches, and reported
+a leak-free 7 MB process that was holding 330 MB. So the run ends by holding 20 thumbnails deliberately:
+
+    control: 20 images held, 8.3 MB declared — IOSurface +8.5 MB, then -8.5 MB on release
+
+The row tracks declared bytes to within 2%, and gives all of it back. The instrument can see what it is
+being asked to watch, so "no growth" now means no growth. A run whose control does not move the row
+prints INCONCLUSIVE and says why, rather than a PASS it has not earned.
+
+**Practical consequence for P2.6:** `CGImageRelease` on the CGImage SCK hands back is sufficient — there
+is no separate `IOSurfaceDecrementUseCount` step to remember, and no accumulation across a hundred
+captures. The bound on thumbnail memory is therefore entirely P1.7's cache policy's to enforce; the
+platform will not leak underneath it. What is still unmeasured is *held* steady state at realistic
+scale — 8.3 MB for 20 tiles at 400 px is the shape, but a 50-window cache at Retina resolution is
+P2.6's number to take, against this same instrument.
+
+**Sampling from inside the process is required, not a convenience.** A capture/release cycle is ~50 ms;
+an external sampler cannot be told where a cycle boundary is and would read the middle of one. `spike/sck`
+therefore carries its own copy of the `vmmap --summary` parsing that `spike/procmem` has. Three copies of
+that parser now exist (memprobe, procmem, sck) and that is deliberate — spikes are throwaway probes, not
+a library. The moment a non-spike needs it, it becomes one package and these die with the phase.
+
+---
+
+## D15 · P0.5 — Phase 0 closes with three answers and one debt — 2026-09-06
+
+Phase 0 existed to settle the platform unknowns that would change the design *before* Phase 2 was planned
+against them. It earned that framing twice: **D3** killed `CGWindowListCreateImage` and forced
+ScreenCaptureKit, and **D12** showed capture cannot happen on the summon path at all. Neither was
+predictable from reading documentation. This is the write-up P0.5 asked for.
+
+**What is settled, and what Phase 2 may now assume:**
+
+| unknown | answer | where the design moved |
+|---|---|---|
+| Can Go put a switcher panel on screen fast enough? | **yes — 1.3 ms warm, 14 ms cold** (D13) | drawing is ~1% of the summon budget. It is not where the time goes. |
+| Can Go capture thumbnails on modern macOS? | **yes, but ~46 ms warm / ~112 ms cold, and it does not parallelise** (D12) | P2.6 captures *ahead* of summon; P3.1 must render a tile with no thumbnail yet. This is a launch requirement, not a refinement. |
+| Do the bitmaps come back? | **yes — 100 cycles, `IOSurface` +0.0 MB, with a control** (D14) | `CGImageRelease` is sufficient. The bound on thumbnail memory is entirely P1.7's policy to enforce; the platform will not leak underneath it. |
+| Does the hotkey arrive in time? | **unknown** | nothing. P0.2 is code without a number. |
+
+**Where the 100 ms summon budget goes** is the single most useful thing Phase 0 produced, and it is not
+the answer the design started with. Enumeration is ~46 ms cold / 0.30 ms warm (D5), capture is ~46 ms and
+refuses to parallelise, drawing is ~1.3 ms. **The budget is spent on data, not on pixels.** A design that
+captured on summon was never going to fit, and it was drawn that way until D12.
+
+**The debt is P0.2 and it is recorded as a debt, not rounded up.** The tap installs at the head of the
+session queue, swallows the key, handles `kCGEventTapDisabledByTimeout`, and instruments the C→Go
+crossing on the tap's own CoreFoundation thread — the crossing D1 measured at 39 ns was on a thread the
+Go runtime already owned, and a tap callback is not that. What is missing is delivery latency, and it is
+missing for a reason that no amount of further work removes: **a synthetic event's timestamp is stamped
+by the poster, not by the HID path.** `spike/hotkey` proves this the hard way — subtracting the two
+clocks produced a delivery latency of *-12.7 days* drifting by ~40,667 ms per second of uptime, the
+signature of the 41.667 ns/tick mismatch between `mach_absolute_time` ticks and `CGEventGetTimestamp`
+nanoseconds. That bug is fixed; the deeper problem is not a bug. Measured synthetically the number is
+post→tap routing only, which is a lower bound on delivery and not delivery. The spike therefore prints
+`INCONCLUSIVE` and asks for `-manual`.
+
+Phase 0's own rule (AGENTS.md) is that an honest `INCONCLUSIVE` beats a green light, and the phase
+already produced one false `GATE PASS` that had to be retracted. So P0.2 stays `[~]` and moves to
+**V6.1**. Phase 2 proceeds on the assumption that ⌥⇥ arrives inside 5 ms — tagged as an assumption in
+the roadmap, at the task that depends on it.
+
+**Phase 0's honest scorecard: it was worth it.** Four tasks changed the design (D3, D5, D12, D13), one
+was dropped after its premise collapsed (D10, P0.7), and one produced a retraction (D4 → D8). The
+retraction is the evidence the phase was doing its job rather than confirming a plan.
+
+---
+
+## D16 · Testing deferred to a Phase 6 — 2026-09-06
+
+**Decision:** per-task tests and measurements are no longer written alongside the work. Phases 2–5 are
+done when the code is written, `scripts/check.sh` is still green on what already exists, and the roadmap
+box is `[x]`. Everything that would have been verified in place is collected in **Phase 6** and run once
+against the assembled app.
+
+**Why it is defensible here.** Most of what would have been tested in Phases 2–3 cannot be unit-tested
+anyway. `ARCHITECTURE.md` already rules `internal/platform` out of unit testing — it is a humble object
+verified by spikes — so "defer the tests" in Phase 2 largely means deferring *manual verification runs*,
+which were always going to be a batch at the end. Phase 1, the part that is genuinely testable, is done
+and its suite is green. Batching the rest against a running app also tests the thing that actually
+matters: seven subsystems composing, which no per-task test observes.
+
+**Why it is a real cost, stated plainly rather than talked out of.** This project's whole Phase 0 thesis
+is that measurement changes the design, and it was right twice (D3, D12). Deferring verification means
+Phases 2–5 are built on four assumptions nothing has checked:
+
+1. the hotkey arrives inside 5 ms (V6.1) — the summon path is designed around it
+2. the panel behaves over a full-screen app and across Spaces (V6.2) — prior art, never measured (D13)
+3. a 50-window Retina cache stays inside a sane bound (V6.4) — D14 measured 20 tiles at 400 px
+4. summon → pixels stays under 100 ms once real data flows (V6.3)
+
+A negative in Phase 6 sends work back into Phase 2 or 3 rather than being absorbed locally, and that
+rework is the price being paid for the speed gained now. **The mitigation is visibility, not optimism:**
+each of the four is tagged `assumption` in `docs/ROADMAP.md` at the task that depends on it, pointing at
+the V6 task that settles it. An assumption written down at its point of use is recoverable; one carried
+in someone's head is what makes the rework expensive.
+
+**What did NOT change.** `scripts/check.sh` stays the merge gate and stays green — deferring means
+writing no *new* per-task tests, never deleting the suite that exists or letting the gate go red. The
+rule against reporting a gate as passing on a number you don't believe is untouched, and P0.2 is the
+first thing it is applied to under this policy: it stays `[~]`.

@@ -8,6 +8,20 @@ Status: `[ ]` todo · `[~]` in progress · `[x]` done · `[!]` blocked · `[-]` 
 Each task: `ID · title · branch · acceptance criterion`. If a task has no measurable acceptance criterion,
 it is not ready to start.
 
+**Testing is deferred to Phase 6 (D16).** From here on a task in Phases 2–5 is done when the code is
+written, `scripts/check.sh` is still green on what already exists, and its box is `[x]`. It does **not**
+carry its own tests and does **not** have to produce a measurement. Everything that would have been
+verified in place is collected in [Phase 6](#phase-6--verification) and run once, against the assembled
+app rather than against seven separate spikes.
+
+Two consequences, written down rather than discovered later:
+
+- **Phase 1's tests stay and stay green.** Deferring means writing no *new* per-task tests; it does not
+  mean deleting the suite that already exists or letting the gate go red.
+- **Design decisions taken between here and Phase 6 rest on assumptions nothing has checked.** Each one
+  is tagged **`assumption`** below. Phase 0 twice changed the design *because* something was measured
+  (D3, D12), so this is the specific risk being accepted, and Phase 6 is where these hold or force rework.
+
 ---
 
 ## Phase 0 — Proof (the gate)
@@ -21,20 +35,28 @@ task that comes back negative changes the approach; it does not stop the work.
       screenshot; the frontmost app never changed across 20 summons. "The call returned" is ~1 ms while
       the cold frame commits at ~14 ms, so measuring the call would have been wrong by 10x.
       **Still open, needs a human:** behaviour over a full-screen app and across Spaces.
-- [ ] **P0.2** CGEventTap hotkey from Go — `spike/hotkey` — ⌥⇥ captured; measure C→Go callback latency
+- [~] **P0.2** CGEventTap hotkey from Go — `spike/hotkey` — **code complete; the measurement is deferred
+      to [V6.1](#phase-6--verification).** The spike is written and builds: a session-level tap inserted
+      at the head, the `kCGEventTapDisabledByTimeout` re-enable, the C→Go crossing instrumented on the
+      tap's own CoreFoundation thread, and the swallow. **No number is claimed and the box is not `[x]`.**
+      The 5 ms budget is about a *real* keypress travelling the HID path, TCC will not let one be
+      synthesised, and the spike prints `INCONCLUSIVE` rather than scoring a synthetic run — see the
+      `-manual` protocol in `docs/tasks/P0.2.md`.
+      **`assumption`:** that the hotkey arrives inside 5 ms. Phase 2's summon path is designed against it.
 - [x] **P0.3** Batched window enumeration — `spike/memory` — **done: 57 ms cold, 0.30 ms warm** for 18 windows
       in one cgo call. Inside budget. See D5 — the cold cost must be paid at launch, not first summon.
-- [~] **P0.4** Thumbnail hold/release — split. Not a competitive target any more (D10), but leaking
-      bitmaps is still a real bug. P0.6 has now shown release working (D12); what P0.4b still needs is an
-      instrument that can see `IOSurface`, because P0.4a built one that cannot.
+- [x] **P0.4** Thumbnail hold/release — split, both halves done. Not a competitive target any more
+      (D10), but leaking bitmaps is still a real bug, and it turned out not to be one.
   - [x] **P0.4a** Build a trustworthy memory instrument — `vmmap` regions / `footprint` CLI / Instruments —
         **DONE (D8):** the instrument is `vmmap --summary` -> the `CG raster data` row plus
         `Physical footprint (peak)`. Reports 368.8 MB / 374.4 MB peak against 366.2 MB declared.
         Implemented in `spike/memprobe`. D4's "instruments are blind" conclusion was wrong.
-  - [ ] **P0.4b** Re-run hold/release against real ScreenCaptureKit output — acceptance is **no growth
-        across 100 capture/release cycles**. P0.6 did 60 hold/release and 10 cycles with clean release, so
-        this is now close to a formality — but **P0.4a's instrument is the wrong one** (D12): SCK output
-        lands in `IOSurface`, not `CG raster data`, and `spike/procmem` must learn that row first.
+  - [x] **P0.4b** Re-run hold/release against real ScreenCaptureKit output — **done (D14): 100 cycles,
+        `IOSurface` moves +0.0 MB.** `spike/sck -cycles 100`. The zeros are only worth something because
+        the run ends by holding 20 thumbnails on purpose: the row tracks 8.3 MB of declared bytes to
+        within 2% and gives all of it back, so the instrument is proven to see what it is watching rather
+        than merely blind — which is the exact way D12 caught P0.4a out. `CGImageRelease` is sufficient;
+        there is no separate `IOSurface` step for P2.6 to remember.
 - [x] **P0.6** ScreenCaptureKit capture prototype — `spike/sck` — **done (D12): it works, and it is too
       slow to use on summon.** Capture is ~46 ms warm / ~112 ms cold, plus ~46 ms to enumerate, and it
       does **not** parallelise (10 at once = 324 ms vs 460 ms serial). The completion handler does fire
@@ -43,17 +65,20 @@ task that comes back negative changes the approach; it does not stop the work.
 - [-] **P0.7** Measure AltTab actual memory — **DROPPED (D10):** beating AltTab on memory is no longer a
       goal, so the baseline has nothing to serve. It was measured far enough to be worth keeping (D10's
       numbers) before it was dropped. `spike/procmem` survives it and is the general memory instrument.
-- [ ] **P0.5** Write up results in `docs/DECISIONS.md` — confirm the panel, hotkey and capture unknowns
-      are settled and Phase 2 can be planned against real numbers. Capture (D12) and the panel (D13) are
-      settled; **P0.2 is the last one.**
+- [x] **P0.5** Write up results in `docs/DECISIONS.md` — **done (D15), and it does not claim a clean
+      sweep.** Three of the four unknowns are settled on measurements Phase 2 can be planned against:
+      capture (D12), the panel (D13), release (D14). The hotkey is **not** — P0.2 is code without a
+      number — and D15 says so plainly instead of closing the phase on an assumption. Where the summon
+      budget goes is nonetheless settled: ~46 ms on capture and ~1.3 ms on drawing means the budget is
+      spent on data, and thumbnails cannot be captured on summon at all.
 
-**Phase 0 targets (all must hold):**
-| metric | budget | why |
+**Phase 0 targets — three of four have a number behind them:**
+| metric | budget | status |
 |---|---|---|
-| summon → pixels on screen | < 100 ms | the switcher has to feel instant; this is the one that matters |
-| hotkey callback latency | < 5 ms | keystroke must not feel dropped |
-| capture → release, 100 cycles | no net growth | proves bitmaps are actually released — a leak here compounds |
-| thumbnail cache | bounded, bound is a number | predictable peak and a warm cache on summon (D9, D10) |
+| summon → pixels on screen | < 100 ms | **budget allocated, not yet measured end to end.** Drawing 1.3 ms (D13), capture ~46 ms and unparallelisable (D12), enumeration 0.30 ms warm (D5) → the budget goes on data → **V6.3** |
+| hotkey callback latency | < 5 ms | **unmeasured** — code exists, only a real keypress counts → **V6.1** |
+| capture → release, 100 cycles | no net growth | **met**: +0.0 MB on `IOSurface`, with a held-20 control proving the instrument is not blind (D14) |
+| thumbnail cache | bounded, bound is a number | **policy met** (P1.7, bounded LRU); the bound's real-world size is **V6.4** |
 
 The old fourth criterion, "steady-state RSS, 50 windows < AltTab's", is gone with D10. It was also
 unmeasurable as written: macOS drives idle thumbnail memory to ~0 on both sides.
@@ -86,7 +111,9 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
 - [ ] **P2.4** SkyLight/CGS notification tap
 - [ ] **P2.5** Focus / raise / minimize / close actions
 - [ ] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Captures
-      ahead of summon, never during it** (D12), and must treat a capture as failable and time-bounded
+      ahead of summon, never during it** (D12), and must treat a capture as failable and time-bounded.
+      **`assumption`:** that a 50-window cache at Retina resolution stays inside a sane bound. D14
+      measured 8.3 MB for 20 tiles at 400 px, which is the shape and not the number → **V6.4**
 
 ---
 
@@ -99,6 +126,10 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
 - [ ] **P3.3** Thumbnail rendering via CALayer contents
 - [ ] **P3.4** Theme / appearance / dark mode
 
+**`assumption` across Phase 3:** that the panel behaves over a full-screen app and across Spaces. The
+`collectionBehavior` flags are AltTab's prior art, not a measurement (D13), and full-screen is where
+switchers most often fail → **V6.2**
+
 ---
 
 ## Phase 4 — Product
@@ -107,7 +138,8 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
 - [ ] **P4.2** Settings UI
 - [ ] **P4.3** Permissions onboarding — Accessibility + Screen Recording
 - [ ] **P4.4** Multi-monitor & Spaces
-- [ ] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh`
+- [ ] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh`. Note `scripts/build.sh` will need
+      `CGO_LDFLAGS_ALLOW` before it can link ScreenCaptureKit weakly → **V6.7**
 
 ---
 
@@ -116,6 +148,36 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
 - [ ] **P5.1** Localization scaffold
 - [ ] **P5.2** VoiceOver / accessibility
 - [ ] **P5.3** Update mechanism (decide: Sparkle via cgo, or plain download)
+
+---
+
+## Phase 6 — Verification
+
+Everything Phases 0–5 deferred, run once against the assembled app. **This phase is not optional and it
+is not a formality**: it is where the `assumption` tags above are cashed in, and a task here coming back
+negative is expected to send work back into an earlier phase rather than be waved through.
+
+Serial, one owner. Three of these (V6.1, V6.2, V6.9) need a human at the machine — TCC blocks synthesising
+the input, which is the same wall P0.7 and P0.1 hit, not a gap in the tooling.
+
+**Order matters.** V6.1 and V6.2 are Phase 0 debts and are cheap; run them first, because either one
+coming back badly changes Phase 2/3 code rather than merely reporting on it.
+
+| ID | what | acceptance | needs |
+|---|---|---|---|
+| **V6.1** | Hotkey delivery latency, real keypress | `spike/hotkey -manual -n 20` reports worst-case event→callback **< 5 ms**, and the first C→Go crossing separately from steady state | a human, Accessibility granted to the responsible process |
+| **V6.2** | Panel over a full-screen app and across Spaces | panel appears **over** a full-screen app and follows the user across Spaces, verified by screenshot rather than by the absence of an error | a human |
+| **V6.3** | Summon → pixels, end to end | **< 100 ms** on the real app, timed to the CA commit and not to the call returning (D13: timing the call is wrong by 10x) | — |
+| **V6.4** | Thumbnail memory at realistic scale | 50-window cache at Retina resolution stays inside the stated bound; measured on `spike/procmem`'s **`IOSurface`** row, sampled at summon (D8: the resident figure decays within seconds) | — |
+| **V6.5** | `internal/platform` behaviour | the platform layer is a humble object and is **not** unit-tested (ARCHITECTURE.md). Verified instead by driving the built `.app`: enumerate → order → raise the window that was selected, on a machine with ≥ 20 windows across ≥ 2 apps | — |
+| **V6.6** | Phase 2/3 tests not written in place | tests for whatever Phase 2/3 grew that is pure enough to test — the C-shim boundary conversions above all — land in `internal/core`-style table tests; `scripts/check.sh` green | — |
+| **V6.7** | Ship the bundle | `./scripts/build.sh` produces a universal `build/GoTab.app` that launches from `/Applications` on a clean account, and `scripts/install.sh` / `uninstall.sh` round-trip. Includes the `CGO_LDFLAGS_ALLOW` fix for weak-linking ScreenCaptureKit | — |
+| **V6.8** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` still reports **0 allocs/op** for summon, cycle and dismiss after Phases 2–5 have wired real data through | — |
+| **V6.9** | Permissions onboarding | from a **revoked** state, the app explains which grant is missing and recovers without a relaunch loop. Both grants: Accessibility and Screen Recording | a human |
+
+**A task contract goes in `docs/tasks/V6.N.md` before that task starts**, same as every other numbered
+task. They are deliberately not written yet: what V6.5 and V6.6 actually have to check depends on what
+Phases 2–5 build, and writing the contract now would be guessing.
 
 ---
 
@@ -223,4 +285,15 @@ Append one line per session. Newest last. This is how a cold session learns what
   synthetically. That needs a human and is the open half of P0.1.
   **Next session: P0.2 (CGEventTap hotkey), the last Phase 0 unknown**, then P0.5 closes the phase and
   Phase 2 begins — serial, one owner.
-
+- `2026-09-06` — **Phase 0 closed, and testing moved to the end (D15, D16).** P0.4b ticked on D14 (100
+  capture/release cycles, `IOSurface` +0.0 MB, with a held-20-thumbnail control proving the instrument
+  is not merely blind). P0.5 written up as D15. **P0.2 is deliberately left `[~]`, not `[x]`** — the
+  hotkey spike is complete code with no number behind it, because only a real keypress measures the
+  thing the 5 ms budget is about and TCC will not let one be synthesised.
+  The direction change: per-task tests and measurements are **deferred to the new Phase 6**, so Phases
+  2–5 are done when the code is written and the gate is still green. The four decisions that now rest
+  on unverified assumptions are tagged **`assumption`** in place and each points at the V6 task that
+  settles it, so the debt is visible from the roadmap rather than remembered. Phase 1's existing tests
+  stay and stay green — deferring means writing no new ones, not deleting the suite.
+  **Next session: P2.1 (C shim skeleton + cgo build integration). Phase 2 does NOT fan out** — one
+  owner, sequential, shared C shim and main thread.
