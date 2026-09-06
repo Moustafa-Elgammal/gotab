@@ -48,5 +48,7 @@ Measured, not assumed — details in [DECISIONS.md](docs/DECISIONS.md):
 - Go's linker forces **macOS 11 minimum**; 10.14/10.15 are permanently out of scope
 - `CGWindowListCreateImage` is **obsoleted in macOS 15** — capture must use ScreenCaptureKit
 - Window enumeration costs **0.30 ms warm** for ~18 windows in one call — comfortably within budget
-- **Nobody can currently measure CoreGraphics memory in-process.** That is the open blocker, and the
-  project's whole premise depends on resolving it. See D4.
+- CoreGraphics bitmap memory **is** measurable — `vmmap --summary` -> `CG raster data` plus
+  `Physical footprint (peak)`, implemented in `spike/procmem`. See D8.
+- macOS reclaims idle thumbnail pages on its own, so a bounded cache buys **peak footprint and fault-in
+  latency**, not a smaller steady state. See D9.

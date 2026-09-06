@@ -174,3 +174,41 @@ is a genuine risk with many windows — but **the size of the win is now an open
 
 **This raises the stakes on P0.7.** Until AltTab's real footprint is measured with D8's instrument, we do
 not know whether the headline goal has meaningful room in it. Do P0.7 before designing the cache.
+
+## D10 · Memory parity with AltTab is no longer a goal — 2026-09-06
+
+**Decision (owner's call).** The project's goal is feature parity with AltTab's core switching, written
+in Go. Using less memory than AltTab is dropped as an objective. D6's framing — "the reason this project
+exists is lower memory" — is superseded; it is left in place because this file is append-only.
+
+**Consequences**, all applied in the same commit:
+
+- P0.7 dropped. Phase 0 is now de-risking (panel, hotkey, ScreenCaptureKit), not a go/no-go.
+- The gate criterion "steady-state RSS, 50 windows < AltTab's" is removed. It was also unmeasurable as
+  written — see the numbers below.
+- `ARCHITECTURE.md`'s memory rule stays, reframed as **correctness**: a leaked bitmap is a bug whatever
+  the goal is. The cache bound is justified by peak footprint and summon-time fault-in latency (D9).
+
+**What P0.7 measured before it was dropped.** AltTab 11.6.0, 19 windows, macOS 26.6.2, measured with
+`spike/procmem` (D8's instrument applied to another pid). Two runs:
+
+| | run 1 (pid 30462) | run 2 (pid 31918, clean process) |
+|---|---|---|
+| `CG raster data` virtual | 110.0 -> 114.3 MB | 23.7 MB, flat |
+| `CG raster data` resident, during summons | max 18.6 MB | max 21.6 MB (91% of virtual) |
+| `CG raster data` resident, idle | **0.0 MB across 35 samples** | — |
+| TOTAL dirty, active -> idle | 73.3 -> 9.9 MB | max 12.5 MB |
+| `Physical footprint (peak)` | 281.3 -> 305.3 MB | 36.6 -> **70.5 MB** |
+
+Run 1's peak is **not usable**: it includes AltTab's first-run onboarding and the permission-grant flow,
+which happened before sampling started. Run 2 restarted AltTab so its peak starts clean at 36.6 MB, and
+~10 summons took it to 70.5 MB. **Treat 70.5 MB peak / ~24 MB of retained thumbnails as the only
+defensible figures**, and note the two runs disagree on retained thumbnail volume (114.3 vs 23.7 MB
+virtual) by a factor of five, unexplained — run 1 had a longer and messier process history. The
+measurement was stopped when the goal changed, so that discrepancy was never chased.
+
+**The finding that outlives the goal:** idle `CG raster` resident went to **0.0 MB and stayed there** for
+the whole idle tail. macOS evicts untouched thumbnail pages completely, on a timescale of seconds. Any
+future memory claim about this project — or any other — must therefore quote peak footprint and virtual
+size, and must sample *during* a summon. Steady-state resident is ~0 for any window switcher on this OS,
+which makes it a useless basis for comparison. This is D9 confirmed against a real third-party target.

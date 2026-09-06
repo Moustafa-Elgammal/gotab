@@ -12,38 +12,40 @@ it is not ready to start.
 
 ## Phase 0 — Proof (the gate)
 
-Nothing else starts until these pass. Purpose: find out whether Go+cgo can drive this at all, cheaply,
-before committing tens of thousands of lines. **A failed gate is a successful phase.**
+Purpose: settle the platform unknowns that would change the design, before Phase 2 is planned in detail.
+**This is de-risking, not a go/no-go** — the project is committed to building the switcher (D10). A Phase 0
+task that comes back negative changes the approach; it does not stop the work.
 
 - [ ] **P0.1** cgo + NSPanel spike — `spike/panel` — a borderless panel shows from Go; measure summon→pixels
 - [ ] **P0.2** CGEventTap hotkey from Go — `spike/hotkey` — ⌥⇥ captured; measure C→Go callback latency
 - [x] **P0.3** Batched window enumeration — `spike/memory` — **done: 57 ms cold, 0.30 ms warm** for 18 windows
       in one cgo call. Inside budget. See D5 — the cold cost must be paid at launch, not first summon.
-- [!] **P0.4** Thumbnail hold/release — **BLOCKED, split.** The naive instruments are blind to CoreGraphics
-      memory: 366 MB of bitmaps showed as ~8 MB of growth. See D4.
+- [~] **P0.4** Thumbnail hold/release — split. Not a competitive target any more (D10), but leaking
+      bitmaps is still a real bug: the instrument exists, so P0.4b just has to prove release works.
   - [x] **P0.4a** Build a trustworthy memory instrument — `vmmap` regions / `footprint` CLI / Instruments —
         **DONE (D8):** the instrument is `vmmap --summary` -> the `CG raster data` row plus
         `Physical footprint (peak)`. Reports 368.8 MB / 374.4 MB peak against 366.2 MB declared.
         Implemented in `spike/memprobe`. D4's "instruments are blind" conclusion was wrong.
-  - [ ] **P0.4b** Re-run hold/release against real ScreenCaptureKit output, using P0.4a's instrument
+  - [ ] **P0.4b** Re-run hold/release against real ScreenCaptureKit output, using P0.4a's instrument —
+        acceptance is **no growth across 100 capture/release cycles**, not a number relative to anything else
 - [ ] **P0.6** ScreenCaptureKit capture prototype — `spike/sck` — CGWindowListCreateImage is gone (D3); this
       is the highest-risk unknown in the whole port and belongs in Phase 0, not Phase 2
-- [~] **P0.7** Measure AltTab actual memory — the goal is "use less than AltTab" and **there is no
-      baseline**: it was never running when the analysis ran. Launch it, open ~20 windows, summon a few
-      times, record steady-state footprint with the P0.4a instrument. Without this the primary goal cannot
-      be evaluated. See D6 and `docs/tasks/P0.7.md`. **In progress:** AltTab 11.6.0 installed, instrument
-      built (`spike/procmem`) and validated against a known 366.2 MB. Idle baseline: 27.4 MB footprint,
-      28.4 MB peak, no `CG raster data`. **Blocked on a human:** thumbnails need Accessibility + Screen
-      Recording, and TCC blocks synthetic keystrokes, so the summons must be pressed by hand.
-- [ ] **P0.5** Write up results in `docs/DECISIONS.md`, decide go/no-go
+- [-] **P0.7** Measure AltTab actual memory — **DROPPED (D10):** beating AltTab on memory is no longer a
+      goal, so the baseline has nothing to serve. It was measured far enough to be worth keeping (D10's
+      numbers) before it was dropped. `spike/procmem` survives it and is the general memory instrument.
+- [ ] **P0.5** Write up results in `docs/DECISIONS.md` — confirm the panel, hotkey and capture unknowns
+      are settled and Phase 2 can be planned against real numbers
 
-**Gate criteria (all must hold):**
+**Phase 0 targets (all must hold):**
 | metric | budget | why |
 |---|---|---|
-| summon → pixels on screen | < 100 ms | AltTab's felt responsiveness |
+| summon → pixels on screen | < 100 ms | the switcher has to feel instant; this is the one that matters |
 | hotkey callback latency | < 5 ms | keystroke must not feel dropped |
-| RSS after capture+release cycle | baseline ± 5 MB | proves the memory rule is achievable |
-| steady-state RSS, 50 windows | < AltTab's | the entire point of the project |
+| capture → release, 100 cycles | no net growth | proves bitmaps are actually released — a leak here compounds |
+| thumbnail cache | bounded, bound is a number | predictable peak and a warm cache on summon (D9, D10) |
+
+The old fourth criterion, "steady-state RSS, 50 windows < AltTab's", is gone with D10. It was also
+unmeasurable as written: macOS drives idle thumbnail memory to ~0 on both sides.
 
 ---
 
@@ -151,3 +153,10 @@ Append one line per session. Newest last. This is how a cold session learns what
   90-sample run; `-name` now re-resolves every sample.
   **Next session: the measurement still needs a human** to grant Accessibility + Screen Recording and
   press ⌥⇥ (TCC blocks synthetic keystrokes). Protocol is in `docs/tasks/P0.7.md`.
+- `2026-09-06` — **Direction change: memory parity with AltTab is no longer a goal (D10).** The project
+  is now feature parity with AltTab's core switching, written in Go, on a sane memory budget. P0.7 dropped,
+  Phase 0 reframed from a go/no-go gate to de-risking the three platform unknowns (panel, hotkey,
+  ScreenCaptureKit), and the AltTab-relative gate criterion replaced with a leak check and a bounded-cache
+  requirement. `spike/procmem` survives as the general memory instrument for any pid.
+  **Next session: P0.1 (NSPanel spike), P0.2 (hotkey), P0.6 (ScreenCaptureKit)** — P0.6 is the highest-risk
+  of the three (D3) and gates the capture design in Phase 2.

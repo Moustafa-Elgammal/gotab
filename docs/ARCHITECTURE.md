@@ -9,9 +9,11 @@ A macOS window switcher written in Go. Clean-slate rewrite of AltTab: **new bund
 migration, no Sparkle continuity, no preference migration.** Nothing on a user's machine is inherited.
 
 Goal, in priority order:
-1. **Lower memory than AltTab** — see [The memory rule](#the-memory-rule-most-important). This is the reason the project exists.
+1. **Feature parity with AltTab's core switching.** The switcher itself, not its whole surface. This is
+   the reason the project exists.
 2. **Learn Go properly** — idiomatic concurrency, explicit resource lifecycle, zero-alloc hot paths.
-3. Feature parity with AltTab's core switching. Not its whole surface.
+3. **Stay within a sane memory budget** — bounded caches, no leaks. A correctness requirement, not a
+   competition with AltTab; see D10 for why that framing was dropped.
 
 Non-goals: cross-platform, macOS < 11 (Go's linker forces `minos 11.0` — measured, not assumed), Pro/licensing.
 
@@ -52,9 +54,10 @@ Real AX calls add Mach IPC on top of that. Therefore:
   allocation, no logic, no logging in the callback body. Work happens on the event-loop goroutine.
 - **No cgo in `internal/core`.** Enforced by review and by the fact that `core` has no build tags.
 
-## The memory rule (most important)
+## The memory rule
 
-This is why the project exists, and it is the thing most likely to go wrong.
+Not a competitive target any more (D10), but still the thing most likely to go wrong: a switcher that
+leaks bitmaps degrades the longer it runs, and Go gives you no help here.
 
 Window thumbnails are `CGImage`/`IOSurface` — **allocated by CoreGraphics, outside the Go heap**. The Go GC
 sees an 8-byte pointer where a multi-megabyte bitmap is pinned. It therefore feels no memory pressure and
@@ -68,14 +71,14 @@ The rules:
    backstop for leak detection in debug builds, **never** the primary mechanism — finalizers run at GC's
    convenience, which is exactly the problem we're solving.
 3. **The cache is bounded and that bound is a number, not a hope.** A fixed-capacity LRU keyed by window id.
-   AltTab retains one thumbnail per window indefinitely; any win comes from *this policy*, not from Go.
-   **But see D9:** macOS already reclaims idle CG raster pages on its own, so the steady-state win over
-   "retain everything" is unquantified until P0.7 measures AltTab. Bound the cache for peak footprint and
-   fault-in latency, not on an assumption about resident size.
+   Bound it for **peak footprint and fault-in latency**, not resident size: macOS already reclaims idle
+   CG raster pages on its own (D9, confirmed against AltTab in D10), so the bound buys predictability and
+   a warm cache on summon, not a smaller steady state.
 4. **Thumbnails are downscaled at capture time**, never captured full-res then shrunk.
-5. **Every phase gate measures memory with D8's instrument** — `vmmap --summary` -> `CG raster data`, plus
+5. **When memory is measured at all, use D8's instrument** — `vmmap --summary` -> `CG raster data`, plus
    `Physical footprint (peak)`. Never instantaneous `phys_footprint`: it silently under-reports bitmaps
-   (that mistake produced D4). Measurement is order-sensitive; reading pixels faults pages back in.
+   (that mistake produced D4). Measurement is order-sensitive; CG raster pages go resident only while
+   recently touched, so sample during a summon. `spike/procmem` does this for any pid.
 
 ## Threading
 
@@ -99,6 +102,6 @@ macOS demands AppKit on the main thread; Go wants to schedule goroutines freely.
 
 ## Status
 
-Phase 0 (proof) is the gate. See [ROADMAP.md](ROADMAP.md). Nothing in Phases 1+ is committed work until the
-Phase 0 gate passes — if the spike can't hit the latency and memory targets, the design changes or the
-project stops, and that is a legitimate outcome.
+Phase 0 de-risks the platform unknowns that could force a different design: panel, hotkey, and
+ScreenCaptureKit capture. See [ROADMAP.md](ROADMAP.md). It is no longer a go/no-go on memory (D10) — the
+project is committed to building the switcher, and Phase 0 exists so Phase 2 is not designed blind.
