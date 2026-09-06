@@ -13,6 +13,36 @@ Spawning an agent costs a cold start: it re-derives context you already hold. Th
 for an isolated, well-specified task with a clear acceptance test. It is never worth paying to "have a
 second opinion" or to do work you could do inline.
 
+## Phase 2 can fan out, once the C surface is carved
+
+The rule above said Phase 2 gets one owner, and the reason was concrete: every Phase 2 task wanted to
+edit `shim.h` and `shim.m`, so four agents meant four conflicts in two files. That is a fact about the
+file layout, not about the work — the tasks themselves share nothing.
+
+So the same move that made Phase 1 parallel works here. **P1.0 froze `api.go` before any agent started;
+the Phase 2 equivalent is giving each task its own file pair.** cgo compiles every `.m` in the package
+directory, so splitting costs nothing at build time and removes the only real collision.
+
+| task | owns | exposes |
+|---|---|---|
+| P2.3b observers | `observe.{h,m,go}` | `StartObservers(func())`, `StopObservers()` |
+| P2.4 Spaces | `space.{h,m,go}` | `CurrentSpace()`, `SpacesOf()` |
+| P2.5 actions | `action.{h,m,go}` | `Raise`, `Minimize`, `Unminimize`, `Close` |
+| P2.6 capture | `capture.{h,m,go}` | `Capture(id, maxWidth) (ImageRef, error)` |
+
+**Frozen for the duration, exactly as `api.go` was:** `shim.h`, `shim.m`, `shim.go`, `window.go`,
+`doc.go`. An agent needing to change one escalates rather than edits — that is the whole mechanism.
+
+Two things stay with the integrator rather than the agents, and this is a deliberate change to the
+definition of done below:
+
+- **`docs/ROADMAP.md` and `docs/DECISIONS.md`.** Four agents appending to an append-only file is four
+  guaranteed conflicts. Agents record findings in their own `docs/tasks/<ID>.md` and in their commit
+  message; the integrator consolidates on merge. Step 3 exists so a cold session can resume, and a
+  merge that lands minutes later serves that just as well.
+- **Wiring.** `internal/app/` and `cmd/gotab/` are shared by definition. Agents expose an API and
+  nothing calls it until integration. An agent that has to edit a caller was scoped wrong.
+
 ## Worktrees
 
 One worktree per task, so agents never share a checkout:
