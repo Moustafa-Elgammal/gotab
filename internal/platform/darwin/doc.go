@@ -12,6 +12,16 @@
 // Every acquire has a matching release; runtime.SetFinalizer is a debug-build leak detector only,
 // never the mechanism.
 //
+// The shim's conventions were fixed by P2.1 and are documented in shim.h: a closed gt_status enum
+// that becomes a Go sentinel error in exactly one place, bulk results written into a caller-allocated
+// buffer so one crossing serves N items, and bitmaps handed out as opaque handles rather than
+// pointers. Later tasks add functions to that shim; they do not invent a second shape.
+//
+// Bitmaps have no producer until P2.6. ImageRef, its release path and the live counter exist ahead of
+// it on purpose, so the task that starts allocating megabytes is not also the task deciding how they
+// are freed. The debug-build finalizer that ARCHITECTURE.md describes as a leak-detection backstop
+// lands with that producer — a finalizer on a type nothing constructs would only rot.
+//
 // This package is deliberately not unit-tested. It is the humble object — correctness here is
 // verified at runtime by the spikes under spike/, not by mocks.
 package darwin

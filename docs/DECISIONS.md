@@ -507,3 +507,90 @@ in someone's head is what makes the rework expensive.
 writing no *new* per-task tests, never deleting the suite that exists or letting the gate go red. The
 rule against reporting a gate as passing on a number you don't believe is untouched, and P0.2 is the
 first thing it is applied to under this policy: it stays `[~]`.
+
+---
+
+## D17 · cgo moves the deployment target, and D2's macOS 11 floor is now 12 — 2026-09-06
+
+Two corrections, found by P2.1 the first time an Objective-C file existed in a non-spike package. Both
+were invisible until then, and one of them shipped a `.app` that could not launch on the OS it claimed.
+
+**Measured on this host (macOS 26.6.2, Go 1.26, SDK 26.0), same trivial `main`:**
+
+| build | `minos` |
+|---|---|
+| pure Go, no cgo | 12.0 |
+| cgo enabled, no C compiled | 12.0 |
+| **cgo with a real `.m` file** | **26.0** |
+| cgo with a real `.m` file, `MACOSX_DEPLOYMENT_TARGET=12.0` | 12.0 |
+
+**Correction 1 — D2 is stale.** D2 recorded that Go's linker forces `minos 11.0`. On Go 1.26 it forces
+**12.0**. Nothing in the project's own code moved it; the toolchain's floor rose underneath a number that
+was written down once and then treated as permanent. README, `ARCHITECTURE.md`, `install.sh`'s guard and
+`Info.plist` all said 11 and are now 12. D2 stands as what was true when it was measured; this supersedes
+it. The `spike/sck` reasoning survives unchanged — SCK arrives in 12.3, still above the floor, so it must
+still be weak-linked.
+
+**Correction 2, and the one that matters — once real Objective-C is compiled, clang decides the
+deployment target, not the Go linker,** and clang's default is the SDK's own version. The `.app` this
+produced declared `LSMinimumSystemVersion 11.0` in its plist and carried `minos 26.0` in its load
+commands. Nothing warns about that. It builds, it signs, it runs perfectly on the machine that built it,
+and it refuses to launch on anything older than macOS 26 — a failure that only ever appears on someone
+else's computer.
+
+**Fix, in `scripts/build.sh`:** one `MIN_MACOS` variable feeds both `MACOSX_DEPLOYMENT_TARGET` and the
+plist, so the two cannot drift, and the build **fails** if any slice's `minos` disagrees with the plist:
+
+    verifying deployment target
+      x86_64: minos 12.0
+      arm64: minos 12.0
+
+The check is the actual deliverable. This regression is one line away at all times — a new
+`-framework`, an Xcode update, a CI runner image bump — and the whole reason it cost anything is that it
+is silent. A build that fails loudly on the developer's machine is worth more than the correct value
+committed once.
+
+**What is still unverified:** that a 12.0-targeted binary actually *runs* on macOS 12. Nothing here has a
+macOS 12 machine, and per D16 that is V6.7's to establish. The claim being made today is narrower and is
+the one that was wrong before: the binary and its plist now agree.
+
+**Incidental:** the ~14 `ld: warning: object file was built for newer 'macOS' version` warnings that
+appear when lowering the target are stale build-cache artifacts, not a real conflict. They vanish on a
+clean `go build` and are not worth suppressing — suppressing them would hide the real version conflict
+they exist to report.
+
+---
+
+## D18 · `cmd/gotab` was never in the repository — 2026-09-06
+
+Found while committing P2.1, because `git status` did not list a file that had just been rewritten.
+
+`.gitignore` carried an unanchored `gotab`, intended for the binary `go build ./cmd/gotab` drops in the
+repo root. A gitignore pattern without a slash matches **any path component** with that name, at any
+depth, directories included. So it matched `cmd/gotab/` — the project's only `package main`, which has
+therefore never been committed.
+
+**A fresh clone had no `cmd/` directory at all**, and `scripts/build.sh` failed on it:
+
+    ==> Building GoTab 0b260c4
+        compiling arm64
+    stat /tmp/.../cmd/gotab: directory not found
+
+`.github/workflows/ci.yml` runs `check.sh` then `build.sh`, so CI has been failing on every commit this
+repository has ever had. Nothing surfaced it, because nothing here reads CI.
+
+**Why it hid so well.** Every local check passes: the file is on disk, `go build ./...` and
+`scripts/check.sh` are green, `./scripts/build.sh` produces a working `.app`. `go build ./...` is green
+in the *clone* too, since a package that does not exist cannot fail to compile. The only signal was the
+absence of a line in `git status` — and an earlier session read the same symptom as "a broken build
+(`cmd/gotab` was empty)" and fixed the contents rather than the tracking.
+
+**Fix:** anchor both patterns — `/gotab` and `/spike/spike` — and commit the package. The anchoring is
+the point: an unanchored name in `.gitignore` is a claim about every directory in the tree, and this repo
+has a `spike/` directory whose subdirectories are named after what they probe.
+
+**What this says about the gate.** `scripts/check.sh` is thorough about the things it was pointed at —
+formatting, vet, tests, the `core` purity invariant — and structurally could not see this, because it
+runs against the working tree rather than against what the working tree would produce. That is a gap in
+what "green" means, not an argument for a bigger checklist. **V6.7 already builds from a clean state and
+is where this belongs**; it now has a concrete failure it must catch, rather than a hypothetical one.

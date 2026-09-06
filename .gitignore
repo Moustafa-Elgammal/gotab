@@ -2,7 +2,10 @@ DerivedData/
 /.worktrees/
 build/
 *.app/
-gotab
-spike/spike
+# Anchored. Unanchored, `gotab` matches ANY path component with that name -- which silently
+# excluded cmd/gotab/ from the repository for its whole history, so a fresh clone had no main
+# package and scripts/build.sh failed in CI (D18). These are built binaries at the repo root only.
+/gotab
+/spike/spike
 .DS_Store
 /.idea/

@@ -105,7 +105,14 @@ Independent, testable, no macOS needed. **This is where multi-agent parallelism 
 
 Shares the C shim and the main thread. **Do not fan out.** One agent, sequential.
 
-- [ ] **P2.1** C shim skeleton + cgo build integration
+- [x] **P2.1** C shim skeleton + cgo build integration — **done, and it caught a shipped bug (D17).**
+      `internal/platform/darwin` compiles Objective-C, links, and ships in the universal `.app`; the
+      conventions every later P2/P3 task follows are fixed in `shim.h` (closed status enum → one Go
+      error mapping, bulk results into a caller buffer, bitmaps as opaque handles). `gt_init` carries
+      D12's `CGMainDisplayID()` trap, so the abort fires in nobody's task. `gotab -check` reports both
+      TCC grants. **The find:** once real ObjC is compiled, clang and not the Go linker sets the
+      deployment target — the `.app` declared macOS 11 and required macOS 26. `build.sh` now derives
+      both from one variable and fails the build if a slice disagrees.
 - [ ] **P2.2** Batched window query — one call → packed array
 - [ ] **P2.3** AX observer registration; callbacks enqueue only
 - [ ] **P2.4** SkyLight/CGS notification tap
@@ -139,7 +146,9 @@ switchers most often fail → **V6.2**
 - [ ] **P4.3** Permissions onboarding — Accessibility + Screen Recording
 - [ ] **P4.4** Multi-monitor & Spaces
 - [ ] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh`. Note `scripts/build.sh` will need
-      `CGO_LDFLAGS_ALLOW` before it can link ScreenCaptureKit weakly → **V6.7**
+      `CGO_LDFLAGS_ALLOW` before it can link ScreenCaptureKit weakly → **V6.7**.
+      **`assumption`:** that a `minos 12.0` binary actually launches on macOS 12. P2.1 proved the binary
+      and its plist agree (D17); nothing here has a macOS 12 machine → **V6.7**
 
 ---
 
@@ -297,3 +306,27 @@ Append one line per session. Newest last. This is how a cold session learns what
   stay and stay green — deferring means writing no new ones, not deleting the suite.
   **Next session: P2.1 (C shim skeleton + cgo build integration). Phase 2 does NOT fan out** — one
   owner, sequential, shared C shim and main thread.
+- `2026-09-06` — **P2.1 done. Phase 2 opens by finding a bug in the shipping bundle.** The shim skeleton
+  is the small part: `internal/platform/darwin` now compiles ObjC and links, `gt_init` carries D12's
+  `CGMainDisplayID()` trap where the abort can't surprise a later task, and `shim.h` fixes the
+  conventions later tasks follow instead of each inventing one. `gotab -check` reports both TCC grants.
+  The find is D17, in two parts. Go 1.26's floor is **`minos 12.0`, not the 11.0 D2 recorded** — the
+  toolchain moved under a number written down once and treated as permanent, and README, ARCHITECTURE,
+  `install.sh` and `Info.plist` had all been repeating it. Worse: **once a real `.m` file exists, clang
+  sets the deployment target, not the Go linker**, and clang defaults to the SDK's version. The `.app`
+  declared `LSMinimumSystemVersion 11.0` and carried `minos 26.0`. It builds, signs and runs perfectly
+  on the machine that built it, and refuses to launch anywhere older than macOS 26 — a failure that only
+  ever appears on someone else's computer. `build.sh` now derives the plist and the Mach-O stamp from
+  one `MIN_MACOS` variable and **fails** if any slice disagrees; the check matters more than the fix,
+  because a new framework or an Xcode bump puts it back one line at a time.
+  **Next session: P2.2 (batched window query — one call, one packed array).** Still serial, one owner.
+- `2026-09-06` — **`cmd/gotab` had never been committed (D18).** Noticed because `git status` did not
+  list a file P2.1 had just rewritten. `.gitignore`'s unanchored `gotab` — meant for the built binary in
+  the repo root — matched the `cmd/gotab/` **directory**, so the project's only `package main` was
+  absent from every clone and `scripts/build.sh` has been failing in CI since the first commit. Locally
+  nothing showed it: the file is on disk, the gate is green, the `.app` builds. An earlier session saw
+  the same symptom, read it as "cmd/gotab was empty", and fixed the contents instead of the tracking.
+  Patterns anchored (`/gotab`, `/spike/spike`) and the package committed. The gate could not have caught
+  this — it checks the working tree, not what a clone would contain — so it stays V6.7's job, which now
+  has a real failure to catch rather than a hypothetical one.
+

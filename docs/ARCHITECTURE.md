@@ -15,7 +15,8 @@ Goal, in priority order:
 3. **Stay within a sane memory budget** — bounded caches, no leaks. A correctness requirement, not a
    competition with AltTab; see D10 for why that framing was dropped.
 
-Non-goals: cross-platform, macOS < 11 (Go's linker forces `minos 11.0` — measured, not assumed), Pro/licensing.
+Non-goals: cross-platform, macOS < 12 (the toolchain forces `minos 12.0` — measured on Go 1.26, not
+assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
 
 ## The four layers
 
@@ -30,8 +31,9 @@ Non-goals: cross-platform, macOS < 11 (Go's linker forces `minos 11.0` — measu
   internal/platform/darwin     cgo + Objective-C. All IPC, all AppKit, all bitmaps.
 ```
 
-Only `cmd/gotab` and the `spike/` probes exist today; `internal/app`, `internal/core/api.go`, and the
-`darwin` implementation are Phase 1+. The diagram is the target, not the current tree.
+`internal/core` is complete (Phase 1) and `internal/platform/darwin` is a shim skeleton that links but
+queries nothing yet (P2.1). **`internal/app` does not exist**, so nothing currently owns the event loop —
+that is Phase 2's to build, and until it does, the diagram is the target rather than the tree.
 
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
@@ -99,9 +101,17 @@ macOS demands AppKit on the main thread; Go wants to schedule goroutines freely.
 - `internal/platform` — **not unit-tested.** It is the humble object: IPC and AppKit only, verified at
   runtime by the spikes and by hand. Do not chase coverage here.
 - Every core package ships `doc.go` stating its invariants in prose. Agents read that instead of the source.
+- **Since D16, new work writes no tests as it goes.** Verification is batched into Phase 6. That changes
+  *when* things are checked, not what is checkable: the two bullets above still decide where coverage
+  can meaningfully live, and `scripts/check.sh` must stay green throughout.
 
 ## Status
 
-Phase 0 de-risks the platform unknowns that could force a different design: panel, hotkey, and
-ScreenCaptureKit capture. See [ROADMAP.md](ROADMAP.md). It is no longer a go/no-go on memory (D10) — the
-project is committed to building the switcher, and Phase 0 exists so Phase 2 is not designed blind.
+Phase 0 is closed (D15). Three of its four unknowns are settled on measurements — the panel (D13),
+ScreenCaptureKit capture (D12) and bitmap release (D14) — and the fourth, hotkey delivery latency, is
+code without a number and is carried as an explicit assumption into V6.1. What Phase 0 bought is knowing
+where the 100 ms summon budget goes: on data, not on pixels, and not on capture, which cannot happen on
+the summon path at all.
+
+Phase 2 is in progress and **does not fan out** — one owner, sequential, because it shares the C shim and
+the main thread. See [ROADMAP.md](ROADMAP.md).
