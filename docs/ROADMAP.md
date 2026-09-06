@@ -21,20 +21,27 @@ task that comes back negative changes the approach; it does not stop the work.
 - [x] **P0.3** Batched window enumeration — `spike/memory` — **done: 57 ms cold, 0.30 ms warm** for 18 windows
       in one cgo call. Inside budget. See D5 — the cold cost must be paid at launch, not first summon.
 - [~] **P0.4** Thumbnail hold/release — split. Not a competitive target any more (D10), but leaking
-      bitmaps is still a real bug: the instrument exists, so P0.4b just has to prove release works.
+      bitmaps is still a real bug. P0.6 has now shown release working (D12); what P0.4b still needs is an
+      instrument that can see `IOSurface`, because P0.4a built one that cannot.
   - [x] **P0.4a** Build a trustworthy memory instrument — `vmmap` regions / `footprint` CLI / Instruments —
         **DONE (D8):** the instrument is `vmmap --summary` -> the `CG raster data` row plus
         `Physical footprint (peak)`. Reports 368.8 MB / 374.4 MB peak against 366.2 MB declared.
         Implemented in `spike/memprobe`. D4's "instruments are blind" conclusion was wrong.
-  - [ ] **P0.4b** Re-run hold/release against real ScreenCaptureKit output, using P0.4a's instrument —
-        acceptance is **no growth across 100 capture/release cycles**, not a number relative to anything else
-- [ ] **P0.6** ScreenCaptureKit capture prototype — `spike/sck` — CGWindowListCreateImage is gone (D3); this
-      is the highest-risk unknown in the whole port and belongs in Phase 0, not Phase 2
+  - [ ] **P0.4b** Re-run hold/release against real ScreenCaptureKit output — acceptance is **no growth
+        across 100 capture/release cycles**. P0.6 did 60 hold/release and 10 cycles with clean release, so
+        this is now close to a formality — but **P0.4a's instrument is the wrong one** (D12): SCK output
+        lands in `IOSurface`, not `CG raster data`, and `spike/procmem` must learn that row first.
+- [x] **P0.6** ScreenCaptureKit capture prototype — `spike/sck` — **done (D12): it works, and it is too
+      slow to use on summon.** Capture is ~46 ms warm / ~112 ms cold, plus ~46 ms to enumerate, and it
+      does **not** parallelise (10 at once = 324 ms vs 460 ms serial). The completion handler does fire
+      on a Go thread with no run loop, so Phase 2 needs no AppKit marshalling. Thumbnails are
+      IOSurface-backed, invisible to footprint, and release cleanly (330.5 MB -> 64 K).
 - [-] **P0.7** Measure AltTab actual memory — **DROPPED (D10):** beating AltTab on memory is no longer a
       goal, so the baseline has nothing to serve. It was measured far enough to be worth keeping (D10's
       numbers) before it was dropped. `spike/procmem` survives it and is the general memory instrument.
 - [ ] **P0.5** Write up results in `docs/DECISIONS.md` — confirm the panel, hotkey and capture unknowns
-      are settled and Phase 2 can be planned against real numbers
+      are settled and Phase 2 can be planned against real numbers. Capture is settled (D12); P0.1 and
+      P0.2 remain.
 
 **Phase 0 targets (all must hold):**
 | metric | budget | why |
@@ -74,14 +81,16 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
 - [ ] **P2.3** AX observer registration; callbacks enqueue only
 - [ ] **P2.4** SkyLight/CGS notification tap
 - [ ] **P2.5** Focus / raise / minimize / close actions
-- [ ] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy
+- [ ] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Captures
+      ahead of summon, never during it** (D12), and must treat a capture as failable and time-bounded
 
 ---
 
 ## Phase 3 — UI (serial)
 
 - [ ] **P3.1** Panel + **single-view renderer** — AltTab has 53 NSView subclasses; we draw all tiles in one
-      view to keep the C→Go callback count near zero
+      view to keep the C→Go callback count near zero. Must render a tile with **no thumbnail yet** and
+      fill it in asynchronously — D12 makes that a launch requirement, not a refinement
 - [ ] **P3.2** Tile layout engine — pure Go computes frames, C only draws
 - [ ] **P3.3** Thumbnail rendering via CALayer contents
 - [ ] **P3.4** Theme / appearance / dark mode
@@ -171,3 +180,17 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next session: Phase 2, and it does NOT fan out** — one owner, sequential, shared C shim and main
   thread. Start with P0.6 (ScreenCaptureKit) if Phase 0's remaining spikes are still open: it is the
   highest-risk unknown and P2.6 is designed against whatever it finds.
+- `2026-09-06` — **P0.6 done, and it changed the design.** ScreenCaptureKit captures fine from Go: the
+  completion handler fires on a Go-owned thread with no NSRunLoop, so Phase 2 needs no AppKit
+  marshalling — the port's biggest threading risk turned out not to be real. The two findings nobody
+  asked for matter more (D12). **Capture is ~46 ms of fixed WindowServer round-trip and does not
+  parallelise** — a full-res image costs the same as a 400 px one, and 10 concurrent captures cost 324 ms
+  against 460 ms serial. With a 100 ms summon budget and 46 ms just to enumerate, **thumbnails cannot be
+  captured on summon**: P2.6 must capture ahead of time and P3.1 must render tiles that have no thumbnail
+  yet. And **SCK output is IOSurface-backed, not `CG raster data`** — 330.5 MB of held surfaces read as
+  7.1 MB of process footprint, so P0.4a's instrument is blind to exactly the thing this project needs to
+  bound. Release is clean (330.5 MB -> 64 K). Also found that CoreGraphics `abort()`s a non-AppKit
+  process on its first capture unless `CGMainDisplayID()` is called first — that will bite P0.1 and P0.2
+  too. One capture timed out entirely in ~10 runs, unreproducibly: SCK can simply not answer.
+  **Next session: P0.1 (NSPanel) and P0.2 (hotkey)**, the last two Phase 0 unknowns, then P0.5 closes the
+  phase. `spike/procmem` needs an `IOSurface` row before P0.4b can run.

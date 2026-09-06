@@ -240,3 +240,96 @@ same fix would be a migration.
 - `Model.Remove` being swap-with-last means an `Order` built before a removal holds row indices past the
   end of the shortened `Model` until the next `Rebuild`. Bounds checks in `Selection` are load-bearing,
   not defensive noise, and `TestIntegration*` pins the sequence.
+
+## D12 · P0.6: ScreenCaptureKit works from Go, but thumbnails cannot be captured on summon — 2026-09-06
+
+`spike/sck`, macOS 26.6.2, M-series, 10 capturable windows on screen. Every number below is the mean of
+repeated runs that agreed to within ~5%.
+
+**The four questions P0.6 was written to answer:**
+
+1. **Does the completion handler fire on a Go-owned thread with no NSRunLoop? Yes.** GCD delivers to its
+   own queues and needs no run loop on the calling thread. The `dispatch_semaphore` timeout in
+   `capture.m` never fired in normal operation. **Phase 2 does not have to marshal captures to the
+   AppKit thread** — the biggest threading risk in the port is not real.
+2. **Cost: ~46 ms warm, ~112 ms cold**, plus **~46 ms** for `getShareableContent`, measured separately.
+3. **Release is clean.** 60 held images, 330.5 MB, drop to 64 K the moment they are released. No leak.
+4. **Downscale at capture time works** — `SCStreamConfiguration.width/height` yields exactly the
+   requested pixels.
+
+**But two things nobody asked, and they are the ones that change the design.**
+
+**(a) Capture is a fixed ~35-46 ms of overhead that does not parallelise.** The cost is independent of
+output size — a 400x237 thumbnail and a full-res 1512x897 one both take ~45 ms, so it is round-trip
+latency to the WindowServer, not pixel work. Issuing captures concurrently barely helps:
+
+| concurrent captures | wall time | per capture |
+|---|---|---|
+| 1 | 46 ms | 46 ms |
+| 2 | 79 ms | 39 ms |
+| 4 | 138 ms | 35 ms |
+| 8 | 260 ms | 33 ms |
+| 10 | 324 ms | 32 ms |
+
+Ten at once costs 324 ms against 460 ms serial — a 1.4x speedup, not 10x. `SCScreenshotManager`
+serialises in the WindowServer; the asynchrony is real but there is no concurrency behind it.
+
+**The consequence is a hard constraint on Phase 2 and Phase 3.** The summon budget is 100 ms for the
+whole path. Enumeration alone is 46 ms and one thumbnail is another 46 ms, so **a summon can afford at
+most one freshly captured thumbnail, and realistically zero.** Capturing on summon is off the table.
+Thumbnails must already exist when the panel opens, which means:
+
+- P2.6 captures in the **background, ahead of summon**, driven by the AX/CGS notifications of P2.3-P2.4.
+- P3.1 must render the panel from whatever the cache holds and fill thumbnails in **asynchronously** —
+  the panel cannot block on pixels. A tile with an app icon and no thumbnail is a state the renderer has
+  to support from the start, not a later refinement.
+- P1.7's bounded LRU is now load-bearing for **latency**, not just memory: a cache miss on summon is a
+  visibly empty tile, so the eviction policy decides what the user sees, not just what is retained.
+
+**(b) SCK thumbnails are IOSurface-backed and are invisible to D8's instrument.** Holding 60 full-res
+images, `vmmap --summary` reports:
+
+```
+IOSurface                        330.5M       0K       0K   ...   61
+Physical footprint:               7105K
+Physical footprint (peak):        7185K
+```
+
+330.5 MB of surfaces across 61 regions, **0 K resident, 0 K dirty**, while the process footprint sits at
+**7.1 MB**. There is no `CG raster data` region at all. The backing store lives in the WindowServer/GPU
+and is only mapped into our address space.
+
+This **corrects D8 and D9 for anything captured through SCK**. D8 concluded that `CG raster data` plus
+`Physical footprint (peak)` account for bitmaps exactly, and that was true of images this process
+allocated itself (`spike/memprobe` synthesises its own). It is false for SCK output: peak footprint —
+D8's "only honest number" — read 7.1 MB while we held 330 MB. **The row to watch for thumbnails is
+`IOSurface` virtual, and `spike/procmem` does not report it yet.** D9's "macOS evicts idle thumbnails to
+~0" also needs restating: these pages were never resident in *our* process to begin with.
+
+The good news in this is real: a bounded thumbnail cache costs almost nothing in our own footprint. The
+memory rule in `ARCHITECTURE.md` still holds as correctness — 61 unreleased surfaces are 330 MB of
+someone's memory, and `CGImageRelease` is still the only thing that returns them.
+
+**One transient failure, recorded because a switcher will meet it.** In one run out of roughly ten, the
+cold capture returned `SCK_TIMEOUT` — the completion handler never fired within 10 s — while a second
+process was concurrently holding 60 full-res surfaces. The shareable window count had also dropped from
+97 to 72. It did not reproduce on retry. **The timeout is not decoration: SCK can simply not answer**,
+and P2.6 must treat a capture as failable and time-bounded rather than assume a result.
+
+**`sck_init` is mandatory and its absence is fatal, not recoverable.** A process that is not an
+NSApplication never opens CoreGraphics' WindowServer connection, and the first `SCScreenshotManager`
+call then dies on `Assertion failed: (did_initialize), function CGS_REQUIRE_INIT, CGInitialization.c:44`
+— an `abort()`, with no error to handle. Any CG display call fixes it; `CGMainDisplayID()` is the
+cheapest. `NSApplicationLoad()` also works but pulls in AppKit and a main-thread requirement that this
+path otherwise does not have. This will bite again in P0.1/P0.2 and anywhere else a Go binary touches
+CoreGraphics before AppKit is up.
+
+**Weak-linking SCK needs an environment variable.** P0.6's task notes said to weak-link the framework as
+AltTab does, so the binary still loads where ScreenCaptureKit is absent — Go forces `minos 11.0` (D1) and
+SCK arrives in 12.3, so this is a real gap and not a formality. cgo rejects it: both
+`-weak_framework ScreenCaptureKit` and `-Wl,-weak_framework,ScreenCaptureKit` fail the LDFLAGS allowlist
+with `invalid flag in #cgo LDFLAGS`. It does work with `CGO_LDFLAGS_ALLOW='-Wl,-weak_framework.*'` in the
+environment, confirmed by `otool -L` showing the framework marked `weak`. **That is a build-script
+requirement, not a source-level one:** `scripts/build.sh` must set it before Phase 2 ships anything, and
+no plain `go build` of that package will be correct without it. The spike links hard, so that the
+`go run ./spike/sck` in AGENTS.md keeps working.
