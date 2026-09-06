@@ -212,3 +212,31 @@ the whole idle tail. macOS evicts untouched thumbnail pages completely, on a tim
 future memory claim about this project — or any other — must therefore quote peak footprint and virtual
 size, and must sample *during* a summon. Steady-state resident is ~0 for any window switcher on this OS,
 which makes it a useless basis for comparison. This is D9 confirmed against a real third-party target.
+
+## D11 · `api.go` amended after Phase 1: `Cache.Capacity` unexported — 2026-09-06
+
+`api.go` is frozen so parallel agents can code against it without coordinating. Freezing is only
+meaningful if amendments are recorded rather than made silently, so: one type changed after the seven
+Phase 1 tasks landed.
+
+`Cache.Capacity` was an exported `int`. `NewCache` panics on `capacity <= 0`, but nothing stopped a
+caller lowering it afterwards, which strands every entry above the new bound with **nobody ever told to
+release them** — precisely the leak the bounded cache exists to prevent, and invisible to the Go GC
+because the bitmaps live outside the heap. The P1.7 agent found this, defended what it could from
+inside its own file (the overflow drop is a loop, so a lowered bound is at least fully reported on the
+next insert), and escalated rather than editing the frozen file. That was the right call.
+
+Now `capacity` is unexported and fixed at construction, read via `Capacity()`. `Touch` panics on a
+zero-value `Cache`, which would otherwise degenerate to holding a single entry rather than failing.
+Changed now because nothing outside `internal/core` consumes it yet; after Phase 2 codes against it the
+same fix would be a migration.
+
+**Two other things Phase 1 established, both consequences of the frozen shapes rather than choices:**
+
+- `Order` holds a single `Rows []int` with no scratch field, which rules out every stdlib stable sort at
+  0 allocs — `sort.SliceStable` boxes a `sort.Interface`, and a sorter closing over both `o.Rows` and
+  `m.Focuses` escapes. `Rebuild` therefore uses an in-place insertion sort: stable, allocation-free, and
+  fine at tens of windows. If window counts ever reach the hundreds this is the line to revisit.
+- `Model.Remove` being swap-with-last means an `Order` built before a removal holds row indices past the
+  end of the shortened `Model` until the next `Rebuild`. Bounds checks in `Selection` are load-bearing,
+  not defensive noise, and `TestIntegration*` pins the sequence.

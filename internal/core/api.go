@@ -193,8 +193,11 @@ type CacheKey struct {
 // tested on any OS. See docs/ARCHITECTURE.md#the-memory-rule; the bound exists for predictable peak
 // footprint and a warm cache on summon (D9, D10), not to win a memory comparison.
 type Cache struct {
-	// Capacity is the maximum number of live entries. Must be > 0.
-	Capacity int
+	// capacity is the maximum number of live entries, fixed at construction. Unexported on
+	// purpose (D11): when it was exported, a caller could lower it after the fact and strand every
+	// entry above the new bound with nobody ever told to release them — the exact leak this type
+	// exists to prevent. Read it with Capacity().
+	capacity int
 
 	// entries is the LRU, most-recently-used first. Slice, not container/list: capacity is small
 	// (tens), so a linear scan beats pointer chasing and allocates nothing.

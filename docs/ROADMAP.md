@@ -54,14 +54,14 @@ unmeasurable as written: macOS drives idle thumbnail memory to ~0 on both sides.
 Independent, testable, no macOS needed. **This is where multi-agent parallelism pays off** — see
 [PARALLEL-WORK.md](PARALLEL-WORK.md). Interfaces in `internal/core/api.go` are frozen before any agent starts.
 
-- [ ] **P1.0** `internal/core/api.go` — freeze the types & interfaces every other P1 task codes against
-- [ ] **P1.1** Window/App model — struct-of-arrays, zero alloc on the hot path — `go test -benchmem` shows 0 allocs/op
-- [ ] **P1.2** MRU ordering kernel — only an attention decision or structural repair may reorder
-- [ ] **P1.3** Filter kernel — minimized / hidden / other-Space / per-app rules, table-driven
-- [ ] **P1.4** Search & fuzzy match — scoring is deterministic and covered by a fixture table
-- [ ] **P1.5** Selection resolver — cycle, wrap, arrows; selection survives list reordering
-- [ ] **P1.6** Tab-group model — group membership, representative election
-- [ ] **P1.7** Thumbnail cache policy — bounded LRU, eviction order proven by test (no bitmaps, just policy)
+- [x] **P1.0** `internal/core/api.go` — freeze the types & interfaces every other P1 task codes against
+- [x] **P1.1** Window/App model — struct-of-arrays, zero alloc on the hot path — `go test -benchmem` shows 0 allocs/op
+- [x] **P1.2** MRU ordering kernel — only an attention decision or structural repair may reorder
+- [x] **P1.3** Filter kernel — minimized / hidden / other-Space / per-app rules, table-driven
+- [x] **P1.4** Search & fuzzy match — scoring is deterministic and covered by a fixture table
+- [x] **P1.5** Selection resolver — cycle, wrap, arrows; selection survives list reordering
+- [x] **P1.6** Tab-group model — group membership, representative election
+- [x] **P1.7** Thumbnail cache policy — bounded LRU, eviction order proven by test (no bitmaps, just policy)
 
 ---
 
@@ -160,3 +160,14 @@ Append one line per session. Newest last. This is how a cold session learns what
   requirement. `spike/procmem` survives as the general memory instrument for any pid.
   **Next session: P0.1 (NSPanel spike), P0.2 (hotkey), P0.6 (ScreenCaptureKit)** — P0.6 is the highest-risk
   of the three (D3) and gates the capture design in Phase 2.
+- `2026-09-06` — **Phase 1 complete.** P1.0 frozen first and serially (`internal/core/api.go`, types only),
+  then P1.1-P1.7 built by seven agents in parallel — the fan-out `PARALLEL-WORK.md` reserves for this phase.
+  ~3,300 lines in `internal/core`, every hot path 0 allocs/op. The five cross-task integration tests passed
+  on first run, so the seven pieces composed without adjustment.
+  Two defects in the contract I wrote, both caught by the agents coding against it, both fixed here:
+  the Space rule guarded `Rules.CurrentSpace == 0` but not a window's own unknown Space (P1.3 extended it
+  symmetrically), and `Cache.Capacity` was an exported field whose "must be > 0" invariant only held at
+  construction — unexported in D11.
+  **Next session: Phase 2, and it does NOT fan out** — one owner, sequential, shared C shim and main
+  thread. Start with P0.6 (ScreenCaptureKit) if Phase 0's remaining spikes are still open: it is the
+  highest-risk unknown and P2.6 is designed against whatever it finds.
