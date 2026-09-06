@@ -1,4 +1,5 @@
 DerivedData/
+/.worktrees/
 build/
 *.app/
 gotab

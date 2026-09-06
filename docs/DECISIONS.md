@@ -120,3 +120,390 @@ and the observability ceilings that cannot be engineered around.
 
 Read it before designing any subsystem. It is the cheapest way to avoid re-deriving several years of
 reverse-engineering, and it names its sources so each claim can be verified against the AltTab tree.
+
+## D8 · P0.4a RESOLVED — the instrument is `vmmap`, and D4 was wrong — 2026-09-06
+
+D4 concluded the instruments were blind to CoreGraphics memory. That was wrong, and the correction
+matters more than the original finding.
+
+**What was tested.** 200 CGImages of 800x600 RGBA (366.2 MB declared), against three hypotheses:
+
+| hypothesis | verdict | evidence |
+|---|---|---|
+| H1 the bytes are never allocated | **rejected** | 0 of 200 contexts returned a NULL data pointer; 366.2 MB written byte-by-byte; `CGDataProviderCopyData` returns 366.2 MB whose content checksum is real noise, not zeros |
+| H2 the instruments cannot see them | **rejected** | `task_info` phys, `vmmap` resident and `vmmap` dirty all agree within 0.1 MB |
+| H3 identical pages are compressed away | **rejected** | identical and unique bitmap content behave the same; `compressed` stays 0.0 MB |
+
+**The actual explanation.** `vmmap --summary` has a dedicated region type for exactly this:
+
+```
+Physical footprint:         11.9M
+Physical footprint (peak):  374.4M
+CG raster data     VIRTUAL 368.8M   RESIDENT (varies)   DIRTY (varies)
+```
+
+The bitmaps were fully resident — peak footprint 374.4 MB against 366.2 MB declared. **macOS reclaims
+idle CG raster pages aggressively and faults them back in on access**, so an instantaneous
+`phys_footprint` reading taken while the images sit untouched reports almost nothing. Reading the pixels
+immediately before measuring showed `CG raster data` resident at the full 368.8 MB; measuring without
+touching them showed 6.4 MB. Same images, same process — only the access pattern differed.
+
+**The instrument, for anyone measuring memory in this project:**
+
+1. `vmmap --summary <pid>` → the **`CG raster data`** row. Its VIRTUAL size is stable and accurate.
+2. **`Physical footprint (peak)`** — the true high-water mark.
+3. **Not** instantaneous `phys_footprint` or `resident_size`. Both are legitimate numbers that answer a
+   different question, and using them here produces the D4 mistake.
+
+Implemented in `spike/memprobe`. Note the measurement is order-sensitive: anything that reads the pixels
+faults the pages back in, so measure before touching, and say which you did.
+
+## D9 · The memory premise is weaker than assumed — 2026-09-06
+
+Direct consequence of D8, and it deserves its own entry because it bears on why this project exists.
+
+**macOS already evicts idle thumbnail pages.** AltTab retains one `CALayerContents` per window
+indefinitely (`Window.swift:40`), and GoTab planned to beat that with a bounded LRU. But the OS is
+already doing a form of that eviction for free: an untouched 366 MB of CG raster data sat at ~6 MB
+resident without any policy from us.
+
+So a bounded LRU would reduce *virtual* size and *peak* footprint, but the steady-state resident win over
+"retain everything and let macOS reclaim" may be small. It is still worth doing — peak footprint is real,
+eviction under pressure has a latency cost when pages fault back in during a summon, and unbounded growth
+is a genuine risk with many windows — but **the size of the win is now an open question, not a given.**
+
+**This raises the stakes on P0.7.** Until AltTab's real footprint is measured with D8's instrument, we do
+not know whether the headline goal has meaningful room in it. Do P0.7 before designing the cache.
+
+## D10 · Memory parity with AltTab is no longer a goal — 2026-09-06
+
+**Decision (owner's call).** The project's goal is feature parity with AltTab's core switching, written
+in Go. Using less memory than AltTab is dropped as an objective. D6's framing — "the reason this project
+exists is lower memory" — is superseded; it is left in place because this file is append-only.
+
+**Consequences**, all applied in the same commit:
+
+- P0.7 dropped. Phase 0 is now de-risking (panel, hotkey, ScreenCaptureKit), not a go/no-go.
+- The gate criterion "steady-state RSS, 50 windows < AltTab's" is removed. It was also unmeasurable as
+  written — see the numbers below.
+- `ARCHITECTURE.md`'s memory rule stays, reframed as **correctness**: a leaked bitmap is a bug whatever
+  the goal is. The cache bound is justified by peak footprint and summon-time fault-in latency (D9).
+
+**What P0.7 measured before it was dropped.** AltTab 11.6.0, 19 windows, macOS 26.6.2, measured with
+`spike/procmem` (D8's instrument applied to another pid). Two runs:
+
+| | run 1 (pid 30462) | run 2 (pid 31918, clean process) |
+|---|---|---|
+| `CG raster data` virtual | 110.0 -> 114.3 MB | 23.7 MB, flat |
+| `CG raster data` resident, during summons | max 18.6 MB | max 21.6 MB (91% of virtual) |
+| `CG raster data` resident, idle | **0.0 MB across 35 samples** | — |
+| TOTAL dirty, active -> idle | 73.3 -> 9.9 MB | max 12.5 MB |
+| `Physical footprint (peak)` | 281.3 -> 305.3 MB | 36.6 -> **70.5 MB** |
+
+Run 1's peak is **not usable**: it includes AltTab's first-run onboarding and the permission-grant flow,
+which happened before sampling started. Run 2 restarted AltTab so its peak starts clean at 36.6 MB, and
+~10 summons took it to 70.5 MB. **Treat 70.5 MB peak / ~24 MB of retained thumbnails as the only
+defensible figures**, and note the two runs disagree on retained thumbnail volume (114.3 vs 23.7 MB
+virtual) by a factor of five, unexplained — run 1 had a longer and messier process history. The
+measurement was stopped when the goal changed, so that discrepancy was never chased.
+
+**The finding that outlives the goal:** idle `CG raster` resident went to **0.0 MB and stayed there** for
+the whole idle tail. macOS evicts untouched thumbnail pages completely, on a timescale of seconds. Any
+future memory claim about this project — or any other — must therefore quote peak footprint and virtual
+size, and must sample *during* a summon. Steady-state resident is ~0 for any window switcher on this OS,
+which makes it a useless basis for comparison. This is D9 confirmed against a real third-party target.
+
+## D11 · `api.go` amended after Phase 1: `Cache.Capacity` unexported — 2026-09-06
+
+`api.go` is frozen so parallel agents can code against it without coordinating. Freezing is only
+meaningful if amendments are recorded rather than made silently, so: one type changed after the seven
+Phase 1 tasks landed.
+
+`Cache.Capacity` was an exported `int`. `NewCache` panics on `capacity <= 0`, but nothing stopped a
+caller lowering it afterwards, which strands every entry above the new bound with **nobody ever told to
+release them** — precisely the leak the bounded cache exists to prevent, and invisible to the Go GC
+because the bitmaps live outside the heap. The P1.7 agent found this, defended what it could from
+inside its own file (the overflow drop is a loop, so a lowered bound is at least fully reported on the
+next insert), and escalated rather than editing the frozen file. That was the right call.
+
+Now `capacity` is unexported and fixed at construction, read via `Capacity()`. `Touch` panics on a
+zero-value `Cache`, which would otherwise degenerate to holding a single entry rather than failing.
+Changed now because nothing outside `internal/core` consumes it yet; after Phase 2 codes against it the
+same fix would be a migration.
+
+**Two other things Phase 1 established, both consequences of the frozen shapes rather than choices:**
+
+- `Order` holds a single `Rows []int` with no scratch field, which rules out every stdlib stable sort at
+  0 allocs — `sort.SliceStable` boxes a `sort.Interface`, and a sorter closing over both `o.Rows` and
+  `m.Focuses` escapes. `Rebuild` therefore uses an in-place insertion sort: stable, allocation-free, and
+  fine at tens of windows. If window counts ever reach the hundreds this is the line to revisit.
+- `Model.Remove` being swap-with-last means an `Order` built before a removal holds row indices past the
+  end of the shortened `Model` until the next `Rebuild`. Bounds checks in `Selection` are load-bearing,
+  not defensive noise, and `TestIntegration*` pins the sequence.
+
+## D12 · P0.6: ScreenCaptureKit works from Go, but thumbnails cannot be captured on summon — 2026-09-06
+
+`spike/sck`, macOS 26.6.2, M-series, 10 capturable windows on screen. Every number below is the mean of
+repeated runs that agreed to within ~5%.
+
+**The four questions P0.6 was written to answer:**
+
+1. **Does the completion handler fire on a Go-owned thread with no NSRunLoop? Yes.** GCD delivers to its
+   own queues and needs no run loop on the calling thread. The `dispatch_semaphore` timeout in
+   `capture.m` never fired in normal operation. **Phase 2 does not have to marshal captures to the
+   AppKit thread** — the biggest threading risk in the port is not real.
+2. **Cost: ~46 ms warm, ~112 ms cold**, plus **~46 ms** for `getShareableContent`, measured separately.
+3. **Release is clean.** 60 held images, 330.5 MB, drop to 64 K the moment they are released. No leak.
+4. **Downscale at capture time works** — `SCStreamConfiguration.width/height` yields exactly the
+   requested pixels.
+
+**But two things nobody asked, and they are the ones that change the design.**
+
+**(a) Capture is a fixed ~35-46 ms of overhead that does not parallelise.** The cost is independent of
+output size — a 400x237 thumbnail and a full-res 1512x897 one both take ~45 ms, so it is round-trip
+latency to the WindowServer, not pixel work. Issuing captures concurrently barely helps:
+
+| concurrent captures | wall time | per capture |
+|---|---|---|
+| 1 | 46 ms | 46 ms |
+| 2 | 79 ms | 39 ms |
+| 4 | 138 ms | 35 ms |
+| 8 | 260 ms | 33 ms |
+| 10 | 324 ms | 32 ms |
+
+Ten at once costs 324 ms against 460 ms serial — a 1.4x speedup, not 10x. `SCScreenshotManager`
+serialises in the WindowServer; the asynchrony is real but there is no concurrency behind it.
+
+**The consequence is a hard constraint on Phase 2 and Phase 3.** The summon budget is 100 ms for the
+whole path. Enumeration alone is 46 ms and one thumbnail is another 46 ms, so **a summon can afford at
+most one freshly captured thumbnail, and realistically zero.** Capturing on summon is off the table.
+Thumbnails must already exist when the panel opens, which means:
+
+- P2.6 captures in the **background, ahead of summon**, driven by the AX/CGS notifications of P2.3-P2.4.
+- P3.1 must render the panel from whatever the cache holds and fill thumbnails in **asynchronously** —
+  the panel cannot block on pixels. A tile with an app icon and no thumbnail is a state the renderer has
+  to support from the start, not a later refinement.
+- P1.7's bounded LRU is now load-bearing for **latency**, not just memory: a cache miss on summon is a
+  visibly empty tile, so the eviction policy decides what the user sees, not just what is retained.
+
+**(b) SCK thumbnails are IOSurface-backed and are invisible to D8's instrument.** Holding 60 full-res
+images, `vmmap --summary` reports:
+
+```
+IOSurface                        330.5M       0K       0K   ...   61
+Physical footprint:               7105K
+Physical footprint (peak):        7185K
+```
+
+330.5 MB of surfaces across 61 regions, **0 K resident, 0 K dirty**, while the process footprint sits at
+**7.1 MB**. There is no `CG raster data` region at all. The backing store lives in the WindowServer/GPU
+and is only mapped into our address space.
+
+This **corrects D8 and D9 for anything captured through SCK**. D8 concluded that `CG raster data` plus
+`Physical footprint (peak)` account for bitmaps exactly, and that was true of images this process
+allocated itself (`spike/memprobe` synthesises its own). It is false for SCK output: peak footprint —
+D8's "only honest number" — read 7.1 MB while we held 330 MB. **The row to watch for thumbnails is
+`IOSurface` virtual, and `spike/procmem` does not report it yet.** D9's "macOS evicts idle thumbnails to
+~0" also needs restating: these pages were never resident in *our* process to begin with.
+
+The good news in this is real: a bounded thumbnail cache costs almost nothing in our own footprint. The
+memory rule in `ARCHITECTURE.md` still holds as correctness — 61 unreleased surfaces are 330 MB of
+someone's memory, and `CGImageRelease` is still the only thing that returns them.
+
+**One transient failure, recorded because a switcher will meet it.** In one run out of roughly ten, the
+cold capture returned `SCK_TIMEOUT` — the completion handler never fired within 10 s — while a second
+process was concurrently holding 60 full-res surfaces. The shareable window count had also dropped from
+97 to 72. It did not reproduce on retry. **The timeout is not decoration: SCK can simply not answer**,
+and P2.6 must treat a capture as failable and time-bounded rather than assume a result.
+
+**`sck_init` is mandatory and its absence is fatal, not recoverable.** A process that is not an
+NSApplication never opens CoreGraphics' WindowServer connection, and the first `SCScreenshotManager`
+call then dies on `Assertion failed: (did_initialize), function CGS_REQUIRE_INIT, CGInitialization.c:44`
+— an `abort()`, with no error to handle. Any CG display call fixes it; `CGMainDisplayID()` is the
+cheapest. `NSApplicationLoad()` also works but pulls in AppKit and a main-thread requirement that this
+path otherwise does not have. This will bite again in P0.1/P0.2 and anywhere else a Go binary touches
+CoreGraphics before AppKit is up.
+
+**Weak-linking SCK needs an environment variable.** P0.6's task notes said to weak-link the framework as
+AltTab does, so the binary still loads where ScreenCaptureKit is absent — Go forces `minos 11.0` (D1) and
+SCK arrives in 12.3, so this is a real gap and not a formality. cgo rejects it: both
+`-weak_framework ScreenCaptureKit` and `-Wl,-weak_framework,ScreenCaptureKit` fail the LDFLAGS allowlist
+with `invalid flag in #cgo LDFLAGS`. It does work with `CGO_LDFLAGS_ALLOW='-Wl,-weak_framework.*'` in the
+environment, confirmed by `otool -L` showing the framework marked `weak`. **That is a build-script
+requirement, not a source-level one:** `scripts/build.sh` must set it before Phase 2 ships anything, and
+no plain `go build` of that package will be correct without it. The spike links hard, so that the
+`go run ./spike/sck` in AGENTS.md keeps working.
+
+## D13 · P0.1: the panel is not the problem — 1.3 ms warm, 14 ms cold — 2026-09-06
+
+`spike/panel`, macOS 26.6.2, M-series, 3024x1964 Retina, 8 tiles drawn in one view. Three runs of 30
+warm summons each agreed to within ~1 ms; the numbers below are representative rather than best-case.
+
+| | call returned | drawRect: ran | frame committed |
+|---|---|---|---|
+| cold (first ever summon) | 0.8-4.1 ms | 1.5-4.8 ms | **13.6-18.2 ms** |
+| warm, mean | 1.1-1.3 ms | 0.8 ms | **1.3 ms** |
+| warm, p50 | 0.8 ms | 0.4 ms | 0.8 ms |
+| warm, worst of 30 | 5.5 ms | 5.2 ms | **3.4-5.9 ms** |
+
+**Against a 100 ms budget the panel costs about 1% of it.** That is the headline, and it is the first
+Phase 0 target that comes back with room to spare rather than a constraint. Contrast D12: capture is
+~46 ms and cannot be done on the summon path at all. **The summon budget will be spent on data, not on
+drawing** — which is a good place to be, because data is the part we control.
+
+**"The call returned" is not "the frame is on screen", and the gap is the whole cold cost.** On the
+first summon `orderFrontRegardless` returns in ~1 ms while the frame does not commit for another ~13 ms.
+ALTTAB-LESSONS section 5 predicted this — CoreAnimation commits at the end of the runloop turn — and it
+is why the spike reports three timestamps instead of one. Anything that measured the call returning
+would have reported 1 ms cold and been wrong by an order of magnitude.
+
+**Every warm summon really re-renders.** `drawRect:` was instrumented specifically to rule out the
+alternative reading, that a re-ordered window is served from a cached backing store and the warm number
+is therefore measuring nothing. **0 of 30 warm summons skipped the draw**, in all three runs. The 1.3 ms
+is the cost of actually drawing eight tiles.
+
+**Two honest limits on these numbers.**
+
+- `commit_ms` and `turn_ms` came out *identical to two decimals* on every single sample. The
+  `CATransaction` completion block and the following main-queue block run in the same runloop drain,
+  microseconds apart. So what is measured is "the end of the runloop turn in which the panel was ordered
+  front", which is when CA hands the frame to the render server — **not photons**. Add up to one display
+  refresh (8.3 ms at 120 Hz, 16.7 ms at 60 Hz) for the real thing. Even the pessimistic reading of the
+  worst cold sample is ~35 ms, still a third of the budget.
+- The spike drives a **nested run loop from Go**, which is the opposite of the app's threading rule
+  (ARCHITECTURE.md#threading: the thread is AppKit's forever, Go marshals back). That is fine for
+  measuring and wrong for building; P3.1 must not copy the structure, only the numbers.
+
+**The non-activating panel works.** Style mask `NSWindowStyleMaskBorderless |
+NSWindowStyleMaskNonactivatingPanel`, activation policy `Accessory`, `becomesKeyOnlyIfNeeded`, shown with
+`orderFrontRegardless`: across 20 summons the frontmost application's pid **never changed** (checked
+against `NSWorkspace.frontmostApplication` before and after each). A switcher that deactivates the app
+you are switching away from is broken, and this is the combination that avoids it.
+
+**Not verified, and it needs a human.** `collectionBehavior` is set to `canJoinAllSpaces |
+fullScreenAuxiliary | Stationary`, which is what should make the panel follow the user across Spaces and
+appear *over* a full-screen app rather than behind it. Neither was actually tested — entering full-screen
+and switching Spaces cannot be driven synthetically here (TCC blocks synthetic keystrokes, the same wall
+P0.7 hit). **The settings are prior art from AltTab, not a measurement**, and they are recorded as such.
+This is the one open question P0.1 leaves behind, and full-screen is where switchers most often fail.
+
+---
+
+## D14 · P0.4b RESOLVED — thumbnails release cleanly, and the instrument is proven, not assumed — 2026-09-06
+
+`spike/sck -cycles 100`, macOS 26.6.2, 9 shareable windows rotated through, 400 px tiles. Every numbered
+sample is taken with **zero images held**, so anything left in the IOSurface row is a leak.
+
+| | IOSurface virtual | footprint |
+|---|---|---|
+| cycle 0 → 100, including framework warm-up | **+0.0 MB** | +2.3 MB |
+| cycle 10 → 100, steady state | **+0.0 MB** | +0.4 MB |
+
+100 cycles, 0 captures failed. **P0.4b's criterion — no growth across 100 capture/release cycles — holds.**
+The ~2 MB of footprint drift is the Go heap and SCK's XPC machinery coming up over the first ten cycles,
+not surfaces: the surface row never moves off zero at all.
+
+**The zeros are only worth something because of the control, and that is the actual finding here.** A row
+that reads 0.0M on every sample is what a clean release looks like *and* what a blind instrument looks
+like — the two are indistinguishable from the deltas alone. That is not a hypothetical worry: D12's whole
+result was that P0.4a's instrument watched `CG raster data`, which SCK output never touches, and reported
+a leak-free 7 MB process that was holding 330 MB. So the run ends by holding 20 thumbnails deliberately:
+
+    control: 20 images held, 8.3 MB declared — IOSurface +8.5 MB, then -8.5 MB on release
+
+The row tracks declared bytes to within 2%, and gives all of it back. The instrument can see what it is
+being asked to watch, so "no growth" now means no growth. A run whose control does not move the row
+prints INCONCLUSIVE and says why, rather than a PASS it has not earned.
+
+**Practical consequence for P2.6:** `CGImageRelease` on the CGImage SCK hands back is sufficient — there
+is no separate `IOSurfaceDecrementUseCount` step to remember, and no accumulation across a hundred
+captures. The bound on thumbnail memory is therefore entirely P1.7's cache policy's to enforce; the
+platform will not leak underneath it. What is still unmeasured is *held* steady state at realistic
+scale — 8.3 MB for 20 tiles at 400 px is the shape, but a 50-window cache at Retina resolution is
+P2.6's number to take, against this same instrument.
+
+**Sampling from inside the process is required, not a convenience.** A capture/release cycle is ~50 ms;
+an external sampler cannot be told where a cycle boundary is and would read the middle of one. `spike/sck`
+therefore carries its own copy of the `vmmap --summary` parsing that `spike/procmem` has. Three copies of
+that parser now exist (memprobe, procmem, sck) and that is deliberate — spikes are throwaway probes, not
+a library. The moment a non-spike needs it, it becomes one package and these die with the phase.
+
+---
+
+## D15 · P0.5 — Phase 0 closes with three answers and one debt — 2026-09-06
+
+Phase 0 existed to settle the platform unknowns that would change the design *before* Phase 2 was planned
+against them. It earned that framing twice: **D3** killed `CGWindowListCreateImage` and forced
+ScreenCaptureKit, and **D12** showed capture cannot happen on the summon path at all. Neither was
+predictable from reading documentation. This is the write-up P0.5 asked for.
+
+**What is settled, and what Phase 2 may now assume:**
+
+| unknown | answer | where the design moved |
+|---|---|---|
+| Can Go put a switcher panel on screen fast enough? | **yes — 1.3 ms warm, 14 ms cold** (D13) | drawing is ~1% of the summon budget. It is not where the time goes. |
+| Can Go capture thumbnails on modern macOS? | **yes, but ~46 ms warm / ~112 ms cold, and it does not parallelise** (D12) | P2.6 captures *ahead* of summon; P3.1 must render a tile with no thumbnail yet. This is a launch requirement, not a refinement. |
+| Do the bitmaps come back? | **yes — 100 cycles, `IOSurface` +0.0 MB, with a control** (D14) | `CGImageRelease` is sufficient. The bound on thumbnail memory is entirely P1.7's policy to enforce; the platform will not leak underneath it. |
+| Does the hotkey arrive in time? | **unknown** | nothing. P0.2 is code without a number. |
+
+**Where the 100 ms summon budget goes** is the single most useful thing Phase 0 produced, and it is not
+the answer the design started with. Enumeration is ~46 ms cold / 0.30 ms warm (D5), capture is ~46 ms and
+refuses to parallelise, drawing is ~1.3 ms. **The budget is spent on data, not on pixels.** A design that
+captured on summon was never going to fit, and it was drawn that way until D12.
+
+**The debt is P0.2 and it is recorded as a debt, not rounded up.** The tap installs at the head of the
+session queue, swallows the key, handles `kCGEventTapDisabledByTimeout`, and instruments the C→Go
+crossing on the tap's own CoreFoundation thread — the crossing D1 measured at 39 ns was on a thread the
+Go runtime already owned, and a tap callback is not that. What is missing is delivery latency, and it is
+missing for a reason that no amount of further work removes: **a synthetic event's timestamp is stamped
+by the poster, not by the HID path.** `spike/hotkey` proves this the hard way — subtracting the two
+clocks produced a delivery latency of *-12.7 days* drifting by ~40,667 ms per second of uptime, the
+signature of the 41.667 ns/tick mismatch between `mach_absolute_time` ticks and `CGEventGetTimestamp`
+nanoseconds. That bug is fixed; the deeper problem is not a bug. Measured synthetically the number is
+post→tap routing only, which is a lower bound on delivery and not delivery. The spike therefore prints
+`INCONCLUSIVE` and asks for `-manual`.
+
+Phase 0's own rule (AGENTS.md) is that an honest `INCONCLUSIVE` beats a green light, and the phase
+already produced one false `GATE PASS` that had to be retracted. So P0.2 stays `[~]` and moves to
+**V6.1**. Phase 2 proceeds on the assumption that ⌥⇥ arrives inside 5 ms — tagged as an assumption in
+the roadmap, at the task that depends on it.
+
+**Phase 0's honest scorecard: it was worth it.** Four tasks changed the design (D3, D5, D12, D13), one
+was dropped after its premise collapsed (D10, P0.7), and one produced a retraction (D4 → D8). The
+retraction is the evidence the phase was doing its job rather than confirming a plan.
+
+---
+
+## D16 · Testing deferred to a Phase 6 — 2026-09-06
+
+**Decision:** per-task tests and measurements are no longer written alongside the work. Phases 2–5 are
+done when the code is written, `scripts/check.sh` is still green on what already exists, and the roadmap
+box is `[x]`. Everything that would have been verified in place is collected in **Phase 6** and run once
+against the assembled app.
+
+**Why it is defensible here.** Most of what would have been tested in Phases 2–3 cannot be unit-tested
+anyway. `ARCHITECTURE.md` already rules `internal/platform` out of unit testing — it is a humble object
+verified by spikes — so "defer the tests" in Phase 2 largely means deferring *manual verification runs*,
+which were always going to be a batch at the end. Phase 1, the part that is genuinely testable, is done
+and its suite is green. Batching the rest against a running app also tests the thing that actually
+matters: seven subsystems composing, which no per-task test observes.
+
+**Why it is a real cost, stated plainly rather than talked out of.** This project's whole Phase 0 thesis
+is that measurement changes the design, and it was right twice (D3, D12). Deferring verification means
+Phases 2–5 are built on four assumptions nothing has checked:
+
+1. the hotkey arrives inside 5 ms (V6.1) — the summon path is designed around it
+2. the panel behaves over a full-screen app and across Spaces (V6.2) — prior art, never measured (D13)
+3. a 50-window Retina cache stays inside a sane bound (V6.4) — D14 measured 20 tiles at 400 px
+4. summon → pixels stays under 100 ms once real data flows (V6.3)
+
+A negative in Phase 6 sends work back into Phase 2 or 3 rather than being absorbed locally, and that
+rework is the price being paid for the speed gained now. **The mitigation is visibility, not optimism:**
+each of the four is tagged `assumption` in `docs/ROADMAP.md` at the task that depends on it, pointing at
+the V6 task that settles it. An assumption written down at its point of use is recoverable; one carried
+in someone's head is what makes the rework expensive.
+
+**What did NOT change.** `scripts/check.sh` stays the merge gate and stays green — deferring means
+writing no *new* per-task tests, never deleting the suite that exists or letting the gate go red. The
+rule against reporting a gate as passing on a number you don't believe is untouched, and P0.2 is the
+first thing it is applied to under this policy: it stays `[~]`.

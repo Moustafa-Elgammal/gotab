@@ -4,9 +4,10 @@ GoTab is a clean-slate rewrite, but the *problem* is not new. AltTab is ~57,000 
 reverse-engineering against undocumented macOS behaviour. This file distils the design conclusions that
 cost the most to discover, so GoTab does not pay for them twice.
 
-**Source:** the AltTab repo at `~/AhmedSha/alt-tab-macos` (`/add-dir` it to read the originals). Every
-claim here was read out of that codebase on 2026-09-06, with the file named so you can go verify. Where
-AltTab records a measurement, the measurement is reproduced rather than paraphrased.
+**Source:** the AltTab repo, <https://github.com/lwouis/alt-tab-macos>. Clone it wherever you like and
+`/add-dir` that checkout to read the originals — nothing in GoTab depends on where it sits. Every claim
+here was read out of that codebase on 2026-09-06, with the file named so you can go verify. Where AltTab
+records a measurement, the measurement is reproduced rather than paraphrased.
 
 **How to use this:** read the relevant section before designing a subsystem, not after. Most entries
 describe a constraint that looks removable until it isn't.

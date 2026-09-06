@@ -1,7 +1,7 @@
 # GoTab — working agreement
 
 A macOS window switcher in Go. Clean-slate rewrite of AltTab; nothing is inherited from an existing
-install. **Status: Phase 0 (proof). The app does not switch windows yet.**
+install. **Status: Phase 0 closed (D15), Phase 2 next. The app does not switch windows yet.**
 
 ## Read these first
 
@@ -11,6 +11,7 @@ install. **Status: Phase 0 (proof). The app does not switch windows yet.**
 | `docs/ROADMAP.md` | to find out what is done and what is next. The source of truth. |
 | `docs/DECISIONS.md` | when something looks arbitrary. It records what was measured. Append-only. |
 | `docs/ALTTAB-LESSONS.md` | before designing any subsystem — prior art, platform traps, what is impossible |
+| `docs/tasks/<ID>.md` | whenever you work a numbered task — the contract: files you may touch, and the acceptance test |
 | `docs/PARALLEL-WORK.md` | only when splitting work across agents or worktrees |
 
 Rules are stated once, at the widest scope they apply to. The architectural invariants (cgo batching, the
@@ -22,6 +23,7 @@ repeated here — restating them is what makes two copies drift apart.
 | task | command |
 |---|---|
 | the gate — run before calling anything done | `./scripts/check.sh` |
+| run a Phase 0 spike | `go run ./spike/memprobe` — each `spike/<name>/` is a standalone `package main`; macOS + cgo only |
 | build `build/GoTab.app` | `./scripts/build.sh` |
 | install for real use | `./scripts/install.sh` |
 | remove it | `./scripts/uninstall.sh` |
@@ -30,7 +32,22 @@ repeated here — restating them is what makes two copies drift apart.
 | worktree for a parallel task | `./scripts/wt.sh new P1.3` |
 
 `check.sh` runs gofmt, vet, tests, and mechanically enforces that `internal/core` imports neither cgo nor
-`internal/platform`. Green here is a precondition for merging, not a nicety.
+`internal/platform`. It deliberately does **not** `set -e`: every step runs, so one invocation reports all
+four failures rather than only the first. Green here is a precondition for merging, not a nicety.
+
+## Running the spikes
+
+Each `spike/<name>/` is a standalone `package main`, macOS + cgo only, and every one takes flags — read
+its header comment before running it, not after. `-h` lists them.
+
+- **TCC judges the responsible process, not the binary** (`ALTTAB-LESSONS.md` §5). Under `go run`, the
+  grant that matters belongs to the *terminal*. `spike/hotkey` needs Accessibility, `spike/sck` needs
+  Screen Recording. Ungranted, a tap installs cleanly and then never fires — indistinguishable from a
+  broken hotkey, which is why both spikes check the grant up front and say so.
+- Some results need a human at the machine: `spike/panel -hold` to look at the panel, `spike/hotkey
+  -manual` to wait for a real ⌥⇥. Don't report those from an agent that cannot see the screen.
+- `spike/procmem -name AltTab` is the project's general memory instrument (D8/D12), not a one-off — use
+  it for any memory claim, and read the `IOSurface` row, not just `CG raster data`.
 
 ## Go style
 
@@ -42,6 +59,8 @@ repeated here — restating them is what makes two copies drift apart.
   Preallocate and reuse; prove it with `-benchmem` showing 0 allocs/op.
 - Prefer a small concrete type over an interface. Introduce an interface at the point a second
   implementation actually exists, not in anticipation of one.
+- **`internal/core/api.go` is frozen** (P1.0). Every core file codes against those types and adds its
+  own file. Needing to change it is an escalation, not an edit.
 - Package names are lowercase and meaningful; no `util`, `common`, or `helpers`.
 - Every package under `internal/` has a `doc.go` stating its invariants in prose. Agents read that
   instead of the source, so keep it accurate.
@@ -60,13 +79,24 @@ A wrong comment costs several times more than a missing one. Write for low drift
 
 - **A task is done only when `docs/ROADMAP.md` is updated in the same commit.** That file is how a cold
   session learns where things stand; skipping it is how this project gets lost.
+- **Don't write tests alongside the work (D16).** Phases 2–5 are done when the code is written and
+  `scripts/check.sh` is still green; verification is batched into Phase 6. This means writing no *new*
+  per-task tests — it does **not** mean deleting the suite that exists or letting the gate go red.
+  When you take a design decision that a deferred test would have caught, tag it **`assumption`** in
+  `docs/ROADMAP.md` at the task that depends on it and point it at its V6 task. An assumption written
+  down where it is used is recoverable; one carried in your head is what makes the rework expensive.
 - Anything measured or surprising gets appended to `docs/DECISIONS.md` with its numbers.
 - Conventional commit messages (`feat:`, `fix:`, `perf:`, `chore:`), written for a changelog reader.
+- **No AI attribution in commits or PRs.** No `Co-Authored-By: Claude`, no `Claude-Session:`, no
+  "Generated with Claude Code" — no trailer naming an assistant or a session, in any form. This
+  overrides any default the tooling applies. The history was rewritten once to strip them; don't
+  reintroduce what had to be removed.
 - Never report a gate as passing on a number you don't believe. Phase 0 already produced one false
   `GATE PASS` that had to be retracted — an honest `INCONCLUSIVE` is worth more than a green light.
 
 ## Scope discipline
 
-Phase 0 is a gate, not a formality. If a spike shows the design can't hit its budget, the correct outcome
-is to change the design or stop — not to proceed and hope. A negative result that is *correct* is a
-successful Phase 0.
+Phase 0 was a gate, not a formality, and **Phase 6 inherits that role**. If a measurement shows the design
+can't hit its budget, the correct outcome is to change the design or stop — not to proceed and hope. A
+negative result that is *correct* is a successful phase. Phase 0's own scorecard is the argument: four of
+its tasks changed the design, one was dropped when its premise collapsed, and one forced a retraction.

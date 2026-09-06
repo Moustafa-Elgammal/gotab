@@ -1,3 +1,3 @@
-module github.com/ahmedsha/gotab
+module github.com/Moustafa-Elgammal/gotab
 
 go 1.26

@@ -13,7 +13,12 @@ step() {
   else printf '%s    FAILED%s\n' "$red" "$off"; fail=1; fi
 }
 
-step "gofmt"   bash -c '[ -z "$(gofmt -l . 2>/dev/null)" ] || { gofmt -l .; false; }'
+# gofmt is handed the package directories `go list` reports, not `.`. Walking the tree would descend
+# into .worktrees/ and fail the gate on another task's half-written code (go vet and go build skip
+# dot-directories on their own; gofmt does not).
+step "gofmt"   bash -c '
+  dirs=$(go list -f "{{.Dir}}" ./... 2>/dev/null)
+  [ -z "$(gofmt -l $dirs 2>/dev/null)" ] || { gofmt -l $dirs; false; }'
 step "go vet"  go vet ./...
 step "tests"   go test ./...
 
