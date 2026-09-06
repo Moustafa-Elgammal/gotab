@@ -1,0 +1,7 @@
+DerivedData/
+build/
+*.app/
+gotab
+spike/spike
+.DS_Store
+/.idea/
