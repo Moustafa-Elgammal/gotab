@@ -194,3 +194,14 @@ Append one line per session. Newest last. This is how a cold session learns what
   too. One capture timed out entirely in ~10 runs, unreproducibly: SCK can simply not answer.
   **Next session: P0.1 (NSPanel) and P0.2 (hotkey)**, the last two Phase 0 unknowns, then P0.5 closes the
   phase. `spike/procmem` needs an `IOSurface` row before P0.4b can run.
+- `2026-09-06` — Project identity and paths made self-contained, ahead of publishing the repo. The module
+  is now `github.com/Moustafa-Elgammal/gotab` (nothing imported the old path, so this was one line).
+  `docs/ALTTAB-LESSONS.md` cited AltTab at a personal absolute path; it now cites the upstream URL and
+  says the checkout can live anywhere. Worktrees moved from the sibling `../gotab-wt/` into `.worktrees/`
+  inside the repo, so a clone cannot scatter directories over its parent. **The leading dot is
+  load-bearing and half of that change is in `check.sh`:** `go list`, `go vet` and `go build ./...` skip
+  dot-directories, but `gofmt -l .` walks them, so the gate would have failed on another task's
+  half-written code. gofmt is now handed the package list from `go list`. Verified both directions —
+  a worktree holding unformatted code leaves the gate green, and unformatted code in the project itself
+  still fails it.
+

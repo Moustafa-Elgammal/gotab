@@ -64,6 +64,10 @@ A wrong comment costs several times more than a missing one. Write for low drift
   session learns where things stand; skipping it is how this project gets lost.
 - Anything measured or surprising gets appended to `docs/DECISIONS.md` with its numbers.
 - Conventional commit messages (`feat:`, `fix:`, `perf:`, `chore:`), written for a changelog reader.
+- **No AI attribution in commits or PRs.** No `Co-Authored-By: Claude`, no `Claude-Session:`, no
+  "Generated with Claude Code" — no trailer naming an assistant or a session, in any form. This
+  overrides any default the tooling applies. The history was rewritten once to strip them; don't
+  reintroduce what had to be removed.
 - Never report a gate as passing on a number you don't believe. Phase 0 already produced one false
   `GATE PASS` that had to be retracted — an honest `INCONCLUSIVE` is worth more than a green light.
 
