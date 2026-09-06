@@ -33,10 +33,11 @@ Read in this order:
 
 | file | what it is |
 |---|---|
+| [AGENTS.md](AGENTS.md) | the working agreement: commands, Go style, workflow. `CLAUDE.md` includes it. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the invariants. Read before touching code. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | every task and its state. The source of truth for "what's done". |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | what was measured and what it forced. Append-only. |
-| [docs/AGENTS.md](docs/AGENTS.md) | how to parallelise this without wasting tokens. |
+| [docs/PARALLEL-WORK.md](docs/PARALLEL-WORK.md) | how to parallelise this without wasting tokens. |
 
 ## What's already known
 

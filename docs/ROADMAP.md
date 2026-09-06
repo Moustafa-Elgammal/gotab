@@ -42,7 +42,7 @@ before committing tens of thousands of lines. **A failed gate is a successful ph
 ## Phase 1 — Core model (pure Go, no cgo, fan out freely)
 
 Independent, testable, no macOS needed. **This is where multi-agent parallelism pays off** — see
-[AGENTS.md](AGENTS.md). Interfaces in `internal/core/api.go` are frozen before any agent starts.
+[PARALLEL-WORK.md](PARALLEL-WORK.md). Interfaces in `internal/core/api.go` are frozen before any agent starts.
 
 - [ ] **P1.0** `internal/core/api.go` — freeze the types & interfaces every other P1 task codes against
 - [ ] **P1.1** Window/App model — struct-of-arrays, zero alloc on the hot path — `go test -benchmem` shows 0 allocs/op

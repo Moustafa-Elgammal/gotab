@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # The gate. Green here is a precondition for marking any task done.
-# Run it once at the end of a task, not per-assertion — see docs/AGENTS.md.
+# Run it once at the end of a task, not per-assertion — see docs/PARALLEL-WORK.md.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -18,9 +18,15 @@ step "go vet"  go vet ./...
 step "tests"   go test ./...
 
 # The architectural invariant that matters most: core must never reach for the platform.
+# Checked against real imports via `go list`, not by grepping text -- a grep matches the rule's own
+# prose in doc.go and reports a violation that isn't there. `-deps` also catches transitive ones.
 step "core stays pure" bash -c '
-  if grep -rn "platform\|\"C\"" internal/core/ --include="*.go" 2>/dev/null | grep -v "_test.go"; then
-    echo "internal/core must not import cgo or internal/platform (see docs/ARCHITECTURE.md)"; false
+  bad=$(go list -deps -f "{{.ImportPath}}" ./internal/core/... 2>/dev/null | grep -Ex "C|.*/internal/platform(/.*)?" || true)
+  if [ -n "$bad" ]; then
+    echo "internal/core must not depend on cgo or internal/platform, but does:"
+    echo "$bad" | sed "s/^/    /"
+    echo "  see docs/ARCHITECTURE.md"
+    false
   fi'
 
 exit $fail

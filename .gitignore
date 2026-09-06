@@ -4,3 +4,4 @@ build/
 gotab
 spike/spike
 .DS_Store
+/.idea/
