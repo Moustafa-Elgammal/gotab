@@ -29,7 +29,8 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	check := flag.Bool("check", false, "report what this process is permitted to do, and exit")
 	list := flag.Bool("list", false, "enumerate windows once and print them, then exit")
-	raw := flag.Bool("raw", false, "with -list: use the CGWindowList candidate set instead of Accessibility")
+	raw := flag.Bool("raw", false, "list only the CoreGraphics candidate set (implies -list)")
+	axOnly := flag.Bool("ax", false, "list only the Accessibility set (implies -list)")
 	flag.Parse()
 
 	if *showVersion {
@@ -48,8 +49,8 @@ func main() {
 	if *check {
 		os.Exit(reportPermissions())
 	}
-	if *list {
-		os.Exit(listWindows(*raw))
+	if *list || *raw || *axOnly {
+		os.Exit(listWindows(*raw, *axOnly))
 	}
 
 	fmt.Fprintf(os.Stderr, "gotab %s: Phase 2 — the switcher is not wired up yet.\n", version)
@@ -79,81 +80,97 @@ func reportPermissions() int {
 // listWindows drives the enumeration and prints what came back. This is what verification looks like
 // for the platform layer: it is the humble object, it is not unit-tested (ARCHITECTURE.md#testing), and
 // since D16 defers the rest to Phase 6, running it and reading the output is the check.
-func listWindows(raw bool) int {
+func listWindows(raw, axOnly bool) int {
+	if raw || axOnly {
+		return listOneSource(raw)
+	}
+
+	e := darwin.NewEnumerator()
+	ws, err := e.Enumerate(make([]core.Window, 0, 128))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		if errors.Is(err, darwin.ErrNotTrusted) {
+			fmt.Fprintln(os.Stderr, "Accessibility is what knows which windows are switchable (D19),")
+			fmt.Fprintln(os.Stderr, "and without it the switcher could not raise one anyway.")
+			fmt.Fprintln(os.Stderr, "`gotab -list -raw` shows the CoreGraphics candidates regardless.")
+		}
+		return 1
+	}
+
+	origins := e.Origins()
+	fmt.Printf("%d switchable windows\n\n", len(ws))
+	fmt.Printf("  %-8s %-7s %-5s %-5s %-24s %s\n", "ID", "PID", "FROM", "STATE", "APP", "TITLE")
+	for i, w := range ws {
+		fmt.Printf("  %-8d %-7d %-5s %-5s %-24.24s %.60s\n",
+			w.ID, w.App, origins[i], state(w.Flags), w.AppName, w.Title)
+	}
+
+	if e.MissingRecovery() {
+		fmt.Fprintln(os.Stderr, "\nScreen Recording is not granted, so windows Accessibility cannot see")
+		fmt.Fprintln(os.Stderr, "(another Space, some accessory apps) are missing from this list. See D21.")
+	}
+
+	// P2.3c's contract: every titled layer-0 window is either in the list or excluded for a reason
+	// the code can name. Printing the reasons is what makes that checkable rather than asserted.
+	if ex := e.Excluded(); len(ex) > 0 {
+		fmt.Printf("\n%d CoreGraphics windows excluded:\n", len(ex))
+		byReason := map[string]int{}
+		for _, x := range ex {
+			byReason[x.Reason]++
+		}
+		for reason, n := range byReason {
+			fmt.Printf("  %3d  %s\n", n, reason)
+		}
+		// The titled ones are the ones worth eyeballing: an untitled XPC service being dropped is
+		// unremarkable, a titled window being dropped is a bug report waiting to happen.
+		for _, x := range ex {
+			if x.Title != "" {
+				fmt.Printf("       titled, still excluded: %d %s — %s\n", x.ID, x.AppName, x.Title)
+			}
+		}
+	}
+	return 0
+}
+
+// listOneSource shows a single enumeration, for comparing against the join.
+func listOneSource(raw bool) int {
 	l := darwin.NewLister()
 	src := darwin.FromAX
+	name := "Accessibility — switchable, but misses windows it cannot see (D20)"
 	if raw {
 		src = darwin.FromCoreGraphics
+		name = "CoreGraphics candidates — not the switchable set (D19)"
 	}
 
 	ws, err := l.List(make([]core.Window, 0, 128), src)
-	// Not `if err != nil { return }`: List returns the windows it did get alongside ErrTruncated, and
-	// throwing away a partial list because it was labelled partial would be the wrong way round.
 	if err != nil && !errors.Is(err, darwin.ErrTruncated) {
 		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
-		if errors.Is(err, darwin.ErrNotTrusted) {
-			fmt.Fprintln(os.Stderr, "Accessibility is what knows which windows are switchable (D19).")
-			fmt.Fprintln(os.Stderr, "Try `gotab -list -raw` for the CoreGraphics candidate set instead.")
-		}
 		return 1
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
 	}
 
-	fmt.Printf("%d windows (%s)\n\n", len(ws), sourceName(raw))
+	fmt.Printf("%d windows (%s)\n\n", len(ws), name)
 	fmt.Printf("  %-8s %-7s %-5s %-24s %s\n", "ID", "PID", "STATE", "APP", "TITLE")
 	titled := 0
-	for i, w := range ws {
+	for _, w := range ws {
 		if w.Title != "" {
 			titled++
 		}
 		fmt.Printf("  %-8d %-7d %-5s %-24.24s %.60s\n",
-			w.ID, w.App, state(w.Flags, l, i, raw), w.AppName, w.Title)
+			w.ID, w.App, state(w.Flags), w.AppName, w.Title)
 	}
-
 	// The distinction gt_window_list's header exists to preserve: no title and not allowed to read the
 	// title look identical in the data, and only the grant tells them apart.
 	if raw && titled == 0 && len(ws) > 0 && !darwin.CheckPermissions().ScreenRecording {
 		fmt.Fprintln(os.Stderr, "\nEvery title is empty and Screen Recording is not granted — that is why.")
 	}
-	if !raw {
-		reportOverlap(l, ws)
-	}
 	return 0
 }
 
-// reportOverlap cross-checks the two enumerations. Both key on CGWindowID, and the only reason the AX
-// list has one at all is the private _AXUIElementGetWindow — so this is the check that the private
-// symbol still returns numbers the rest of the system agrees with, rather than plausible garbage.
-func reportOverlap(l *darwin.Lister, ax []core.Window) {
-	cg, err := l.List(make([]core.Window, 0, 128), darwin.FromCoreGraphics)
-	if err != nil {
-		return
-	}
-	known := make(map[core.WindowID]bool, len(cg))
-	for _, w := range cg {
-		known[w.ID] = true
-	}
-	matched := 0
-	for _, w := range ax {
-		if known[w.ID] {
-			matched++
-		}
-	}
-	fmt.Printf("\n%d of %d AX windows carry an ID CoreGraphics also reports (of %d candidates).\n",
-		matched, len(ax), len(cg))
-}
-
-func sourceName(raw bool) string {
-	if raw {
-		return "CoreGraphics candidates — not the switchable set, see D19"
-	}
-	return "Accessibility — the switchable set"
-}
-
-// state packs the flags into one column. "-" is not "false", it is "this source does not know".
-func state(f core.WindowFlags, l *darwin.Lister, i int, raw bool) string {
+// state packs the flags into one column. "-" is not "false", it is "no source knew".
+func state(f core.WindowFlags) string {
 	s := ""
 	if f.Has(core.FlagOnScreen) {
 		s += "o"
@@ -164,20 +181,10 @@ func state(f core.WindowFlags, l *darwin.Lister, i int, raw bool) string {
 	if f.Has(core.FlagHidden) {
 		s += "h"
 	}
-	if !raw && !l.Standard(i) {
-		s += "d" // dialog, sheet or palette rather than a standard window
-	}
 	if s == "" {
 		return "-"
 	}
 	return s
-}
-
-func onScreen(f core.WindowFlags) string {
-	if f.Has(core.FlagOnScreen) {
-		return "yes"
-	}
-	return "-"
 }
 
 func grant(ok bool) string {

@@ -87,6 +87,11 @@ typedef struct gt_window {
     int32_t minimized;   // kAXMinimizedAttribute
     int32_t hidden;      // the owning application is hidden (Cmd-H). Per app, not per window.
     int32_t standard;    // subrole is kAXStandardWindowSubrole; 0 means a dialog, palette or sheet
+    // NSApplicationActivationPolicy of the owning application: 0 regular, 1 accessory, 2 prohibited,
+    // -1 if the process is gone by the time we ask. Filled by BOTH enumerations, because it is the
+    // one signal that separates a real application's window from an XPC view service's -- and unlike
+    // the title it does not depend on a TCC grant. See gt_window_list on why the title cannot be it.
+    int32_t policy;
     uint16_t title_len;  // bytes in title, excluding the terminator. 0 means absent OR unpermitted.
     uint16_t app_len;
     char title[GT_TITLE_MAX];
@@ -107,6 +112,12 @@ typedef struct gt_window {
 // Titles require the Screen Recording grant. Without it kCGWindowName is absent for other
 // applications' windows and title_len comes back 0 for all of them. That is not an error and is not
 // reported as one: gt_can_record() is how a caller tells "no title" from "not allowed to see it".
+//
+// This is also why `policy` exists. The obvious way to sort real windows from noise in this list is
+// "does it have a title", and D19 measured that working perfectly -- 7 titled entries which were
+// exactly the 7 switchable windows. It is still the wrong rule: on a machine without Screen Recording
+// every title is empty and the rule admits nothing, and a genuinely untitled document window is
+// ordinary. The activation policy answers a narrower question that does not move with a TCC grant.
 gt_status gt_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *out_total);
 
 // Enumerates switchable windows through Accessibility, in one crossing, with the same buffer contract

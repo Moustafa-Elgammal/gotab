@@ -688,3 +688,53 @@ Removing it recovers nothing — AX reports zero windows for that process either
 different order from D1's 31 ns cgo crossing, and D5's launch-time budget is what it has to fit in. Each
 application element carries a 0.25 s messaging timeout so a wedged app is skipped rather than waited on,
 but no timing number is claimed here. **V6.3** owns it.
+
+---
+
+## D21 · The join works, and it costs a TCC grant — 2026-09-06
+
+P2.3c joins both enumerations on `CGWindowID`. Measured on the same session as D19 and D20:
+
+| | count |
+|---|---|
+| CoreGraphics layer-0 candidates | 58 |
+| Accessibility switchable set | 5 |
+| **joined result** | **7** |
+| excluded, activation policy `prohibited` | 13 |
+| excluded, no title and AX did not report it | 37 |
+| excluded, process already gone | 1 |
+| **titled windows excluded** | **0** |
+
+The seven are the five Accessibility reported plus **both of D20's misses** — Chrome's second window and
+Notion Calendar's — recovered. Five carry `both` provenance, two carry `cg`. No titled layer-0 window is
+excluded, which is P2.3c's contract discharged rather than asserted.
+
+**The admission rule is `activation policy is not prohibited` AND `the window has a title`. Both halves
+are needed and neither is sufficient**, which was worth finding out by trying the weaker one:
+
+- **Policy alone admits 37 untitled auxiliary windows** — offscreen buffers, popovers and toolbars
+  belonging to Chrome, Finder, Terminal, GoLand and System Settings. Real applications own a great many
+  layer-0 windows nobody can switch to. A first attempt shipped this rule and produced a 44-window list.
+- **Title alone** admits any XPC view service that happens to have one, which is what the policy check
+  is there to stop.
+
+**The uncomfortable part: this rule depends on a TCC grant.** `kCGWindowName` requires Screen Recording.
+Without it every CoreGraphics-only title is empty, the recovery branch admits nothing, and the result
+degrades to exactly the Accessibility list — losing the other-Space windows the join exists to recover.
+D19 already warned the title is not a filter and this is that warning coming true, only narrowed: the
+title is not the *primary* filter, it is the tiebreak for windows AX could not see, and the failure mode
+is a list that is short rather than a list that is wrong.
+
+That degradation is reported rather than hidden — `Enumerator.MissingRecovery` is true exactly when it
+applies, and `gotab -list` says so. A user who grants Screen Recording for thumbnails gets correct
+enumeration as a side effect, which is worth knowing when P4.3 writes the onboarding copy: the grant is
+not only about pictures.
+
+**The lead worth following, and deliberately not followed here.** `kCGWindowBounds` needs no grant at
+all, and the 37 wrongly-admitted windows are plausibly separable by size — many auxiliary windows are
+tiny or zero-area. If bounds discriminate as well as the title does, the Screen Recording dependency
+disappears from enumeration entirely. That is a measurement, not a guess, and it is not this task's:
+recorded here so the next person does not have to notice it independently.
+
+**Cost is two crossings, not 2N** — one enumeration per source regardless of window count, which is the
+cgo rule holding up under a design that reads the window list twice.

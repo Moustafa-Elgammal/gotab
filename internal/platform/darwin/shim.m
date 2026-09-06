@@ -80,6 +80,19 @@ static uint16_t copy_cfstring(CFStringRef s, char *dst, int cap) {
     return (uint16_t)used;
 }
 
+// Activation policy for a pid, with a one-entry cache. CGWindowList returns a process's windows
+// consecutively, so the cache hits for every window after an application's first and this costs one
+// lookup per application rather than one per window.
+static int32_t policy_for_pid(pid_t pid) {
+    static pid_t cached_pid = 0;
+    static int32_t cached_policy = -1;
+    if (pid == cached_pid) return cached_policy;
+    NSRunningApplication *app = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    cached_pid = pid;
+    cached_policy = app ? (int32_t)app.activationPolicy : -1;
+    return cached_policy;
+}
+
 static int32_t dict_int32(CFDictionaryRef d, CFStringRef key, int32_t fallback) {
     CFNumberRef n = (CFNumberRef)CFDictionaryGetValue(d, key);
     int32_t v = fallback;
@@ -104,6 +117,9 @@ gt_status gt_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *o
     CFIndex count = CFArrayGetCount(list);
     int32_t stored = 0, total = 0;
 
+    // policy_for_pid vends autoreleased NSRunningApplication objects. Without a pool around the loop
+    // they accumulate until the caller's pool drains, which for a Go-owned thread may be never.
+    @autoreleasepool {
     for (CFIndex i = 0; i < count; i++) {
         CFDictionaryRef d = (CFDictionaryRef)CFArrayGetValueAtIndex(list, i);
         if (!d) continue;
@@ -116,9 +132,11 @@ gt_status gt_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *o
         if (stored >= cap) continue;  // count it, drop it; the caller grows and retries
 
         gt_window *w = &buf[stored];
+        memset(w, 0, sizeof(*w));
         w->id = (uint32_t)dict_int32(d, kCGWindowNumber, 0);
         w->pid = dict_int32(d, kCGWindowOwnerPID, 0);
         w->layer = 0;
+        w->policy = policy_for_pid((pid_t)w->pid);
         w->on_screen = CFDictionaryGetValue(d, kCGWindowIsOnscreen) == kCFBooleanTrue ? 1 : 0;
 
         w->alpha = 1.0f;
@@ -137,6 +155,7 @@ gt_status gt_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *o
         w->app_len = copy_cfstring((CFStringRef)CFDictionaryGetValue(d, kCGWindowOwnerName),
                                    w->app, GT_APPNAME_MAX);
         stored++;
+    }
     }
 
     CFRelease(list);
@@ -256,6 +275,7 @@ gt_status gt_ax_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t
                 w->id = (uint32_t)wid;
                 w->pid = (int32_t)pid;
                 w->hidden = appHidden;
+                w->policy = (int32_t)NSApplicationActivationPolicyRegular;
                 w->minimized = ax_bool(win, kAXMinimizedAttribute, false) ? 1 : 0;
                 w->title_len = ax_string(win, kAXTitleAttribute, w->title, GT_TITLE_MAX);
                 w->app_len = appLen;

@@ -129,12 +129,13 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
         each app element has a 0.25 s messaging timeout so a wedged app is skipped, not waited on.
   - [ ] **P2.3b** AX observer registration; callbacks enqueue and return, nothing else. **Blocked on a
         place to enqueue *to*:** `internal/app` does not exist. That, not this, is the next real task.
-  - [ ] **P2.3c** Join the two enumerations on `CGWindowID` — **new, and required (D20).** AX misses
-        windows CoreGraphics can see: a second Chrome window (`kAXWindows` returned 1 for a process with
-        2) and an `.Accessory` app's ordinary titled window. Both calls succeeded; the answers were just
-        short. CoreGraphics supplies the universe and on-screen state, AX supplies switchability, title
-        and minimized. Acceptance: **every titled layer-0 window is either in the model or excluded for
-        a reason the code can name.**
+  - [x] **P2.3c** Join the two enumerations on `CGWindowID` — **done (D21): 58 candidates + 5 AX → 7
+        switchable, with both of D20's misses recovered and 0 titled windows excluded.** The rule is
+        `activation policy is not prohibited` AND `has a title`; policy alone admitted 37 untitled
+        auxiliary windows, title alone would admit an XPC service. Two crossings, not 2N. **It costs a
+        TCC grant:** CoreGraphics titles need Screen Recording, so without it the recovery branch is
+        inert and the list degrades to the AX set — reported by `MissingRecovery`, not hidden. The lead
+        that would remove that dependency (`kCGWindowBounds` needs no grant) is recorded in D21.
 - [ ] **P2.4** SkyLight/CGS notification tap **and Space query**. **Promoted by D20:** the likeliest
       reason AX cannot see Chrome's second window is that it is on another Space, and nothing here
       confirms that because driving a Space change needs a human. This is the task that turns the guess
@@ -384,4 +385,21 @@ Append one line per session. Newest last. This is how a cold session learns what
   driving a Space change needs a human, so V6.2 carries the human half.
   **Next session: P2.3c (the join), then `internal/app` — P2.3b's callbacks have nowhere to enqueue to
   until the event loop exists.** Still serial, one owner.
+- `2026-09-06` — **P2.3c done: the join produces the right list (D21).** 58 CoreGraphics candidates and
+  5 Accessibility windows join to **7 switchable windows** — the five AX saw plus both windows D20 found
+  it missing — with 51 exclusions each carrying a named reason and **no titled window excluded**, which
+  is the task's contract discharged rather than asserted. Two crossings, not 2N.
+  **The admission rule needed both halves, and finding that out cost a wrong first attempt.** Activation
+  policy alone produced a 44-window list: real applications own a great many untitled layer-0 windows —
+  offscreen buffers, popovers, toolbars — that nobody can switch to. Title alone would admit any XPC
+  service that has one. Together they give exactly 7.
+  **The catch is a TCC dependency.** `kCGWindowName` needs Screen Recording, so without that grant the
+  CoreGraphics-only recovery admits nothing and the list quietly degrades to the AX set — losing the
+  other-Space windows the join exists to recover. It is reported (`MissingRecovery`) rather than hidden,
+  and it means the Screen Recording grant is not only about thumbnails, which P4.3's onboarding copy
+  should say. D21 records the lead that would remove the dependency: `kCGWindowBounds` needs no grant,
+  and the 37 wrongly-admitted windows are plausibly separable by size. That is a measurement, not a
+  guess, and it was not made here.
+  **Next session: `internal/app` — the event loop.** P2.3b's observers have had nowhere to enqueue to
+  since D20, and it is now the only thing between here and a switcher that reacts to anything.
 
