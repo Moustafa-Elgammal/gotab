@@ -36,6 +36,7 @@ Read in this order:
 | [AGENTS.md](AGENTS.md) | the working agreement: commands, Go style, workflow. `CLAUDE.md` includes it. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the invariants. Read before touching code. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | every task and its state. The source of truth for "what's done". |
+| [docs/ALTTAB-LESSONS.md](docs/ALTTAB-LESSONS.md) | prior art: AltTab platform knowledge and the traps it hit. |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | what was measured and what it forced. Append-only. |
 | [docs/PARALLEL-WORK.md](docs/PARALLEL-WORK.md) | how to parallelise this without wasting tokens. |
 

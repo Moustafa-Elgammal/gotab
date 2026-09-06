@@ -27,6 +27,10 @@ before committing tens of thousands of lines. **A failed gate is a successful ph
   - [ ] **P0.4b** Re-run hold/release against real ScreenCaptureKit output, using P0.4a's instrument
 - [ ] **P0.6** ScreenCaptureKit capture prototype — `spike/sck` — CGWindowListCreateImage is gone (D3); this
       is the highest-risk unknown in the whole port and belongs in Phase 0, not Phase 2
+- [ ] **P0.7** Measure AltTab actual memory — the goal is "use less than AltTab" and **there is no
+      baseline**: it was never running when the analysis ran. Launch it, open ~20 windows, summon a few
+      times, record steady-state footprint with the P0.4a instrument. Without this the primary goal cannot
+      be evaluated. See D6.
 - [ ] **P0.5** Write up results in `docs/DECISIONS.md`, decide go/no-go
 
 **Gate criteria (all must hold):**
@@ -108,3 +112,9 @@ Append one line per session. Newest last. This is how a cold session learns what
   and the spike's original "PASS" was wrong — removed. Split into P0.4a (build an instrument) / P0.4b.
   Also found `CGWindowListCreateImage` is obsoleted in macOS 15, forcing ScreenCaptureKit — added P0.6.
   **Next session starts at P0.4a.**
+- `2026-09-06` — Handoff. Added `docs/ALTTAB-LESSONS.md` (AltTab platform knowledge, distilled with
+  sources), D6 (project framing and rejected alternatives) and D7. Fixed a broken build (`cmd/gotab` was
+  empty) and a false-positive purity gate. Added P0.7: **AltTab memory was never measured, so the
+  primary goal has no baseline.**
+  **Next session: start with P0.4a (`docs/tasks/P0.4a.md`), then P0.7.** Those two together decide whether
+  the memory premise holds; everything else is downstream of that answer.

@@ -10,6 +10,7 @@ install. **Status: Phase 0 (proof). The app does not switch windows yet.**
 | `docs/ARCHITECTURE.md` | before touching any code — the invariants live there, not here |
 | `docs/ROADMAP.md` | to find out what is done and what is next. The source of truth. |
 | `docs/DECISIONS.md` | when something looks arbitrary. It records what was measured. Append-only. |
+| `docs/ALTTAB-LESSONS.md` | before designing any subsystem — prior art, platform traps, what is impossible |
 | `docs/PARALLEL-WORK.md` | only when splitting work across agents or worktrees |
 
 Rules are stated once, at the widest scope they apply to. The architectural invariants (cgo batching, the

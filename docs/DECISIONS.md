@@ -79,3 +79,44 @@ WindowServer round trip; the summon path only ever pays the warm cost.
 **Consequence:** 0.30 ms is comfortably inside the 100 ms summon budget, so batched enumeration is viable.
 But the 57 ms cold cost must be paid at launch, not on first summon — warm the WindowServer connection
 during startup or the very first ⌥⇥ of a session blows the budget.
+
+## D6 · Project framing — why this project exists in this shape — 2026-09-06
+
+Recorded because the reasoning came out of a conversation and would otherwise be lost. These are settled
+decisions, not open questions.
+
+**Goals, in priority order:** (1) lower memory than AltTab, (2) learn Go properly. Feature parity is a
+means, not the goal.
+
+**Scope decisions and what they bought:**
+
+| decision | consequence |
+|---|---|
+| macOS only | no cross-platform constraints; full AppKit/private-API surface stays in play |
+| clean break — new bundle ID | no Keychain/license migration, no 25 preference migrations to port, no Sparkle continuity. Removed the majority of the original risk. |
+| full app replacement in Go | accepted with the cgo costs in D1 measured and understood up front |
+
+**Rejected, with reasons, so they are not relitigated:**
+
+- *Go core + Swift UI shell* — the pure kernels are the 14% of AltTab that does no IPC, so they are
+  precisely the code with the least to gain from a port. The 86% that would benefit is the part Go cannot
+  express.
+- *Preserving macOS 10.14 support* — impossible, see D2.
+- *Preserving Pro licensing* — dropped with the clean break. Note for any future reversal: AltTab
+  `Keychain.swift:42` documents that a same-bundle-id build with a **different code signature** cannot read
+  the item but *can* silently overwrite it. Same Developer ID cert + TeamID + bundle ID is the whole
+  requirement, and it is all-or-nothing.
+
+**An honest caveat on goal (1):** AltTab actual memory footprint was never measured — it was not running
+during the analysis session. So "lower memory than AltTab" currently has **no baseline**. See P0.7. Until
+both P0.4a (an instrument that works) and P0.7 (a number to beat) exist, the primary goal is unfalsifiable.
+
+## D7 · Prior art is captured, not inherited — 2026-09-06
+
+`docs/ALTTAB-LESSONS.md` distils AltTab hard-won platform knowledge: the two-plane architecture, the rule
+that only an attention decision or structural repair may move MRU, the 60 ms settle, the macOS traps
+(synchronous XPC inside AppKit, TCC responsible-process rule, the capture drain, the signal-mask hazard),
+and the observability ceilings that cannot be engineered around.
+
+Read it before designing any subsystem. It is the cheapest way to avoid re-deriving several years of
+reverse-engineering, and it names its sources so each claim can be verified against the AltTab tree.
