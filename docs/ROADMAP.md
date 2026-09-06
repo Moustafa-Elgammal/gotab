@@ -28,10 +28,13 @@ before committing tens of thousands of lines. **A failed gate is a successful ph
   - [ ] **P0.4b** Re-run hold/release against real ScreenCaptureKit output, using P0.4a's instrument
 - [ ] **P0.6** ScreenCaptureKit capture prototype — `spike/sck` — CGWindowListCreateImage is gone (D3); this
       is the highest-risk unknown in the whole port and belongs in Phase 0, not Phase 2
-- [ ] **P0.7** Measure AltTab actual memory — the goal is "use less than AltTab" and **there is no
+- [~] **P0.7** Measure AltTab actual memory — the goal is "use less than AltTab" and **there is no
       baseline**: it was never running when the analysis ran. Launch it, open ~20 windows, summon a few
       times, record steady-state footprint with the P0.4a instrument. Without this the primary goal cannot
-      be evaluated. See D6.
+      be evaluated. See D6 and `docs/tasks/P0.7.md`. **In progress:** AltTab 11.6.0 installed, instrument
+      built (`spike/procmem`) and validated against a known 366.2 MB. Idle baseline: 27.4 MB footprint,
+      28.4 MB peak, no `CG raster data`. **Blocked on a human:** thumbnails need Accessibility + Screen
+      Recording, and TCC blocks synthetic keystrokes, so the summons must be pressed by hand.
 - [ ] **P0.5** Write up results in `docs/DECISIONS.md`, decide go/no-go
 
 **Gate criteria (all must hold):**
@@ -136,3 +139,15 @@ Append one line per session. Newest last. This is how a cold session learns what
   line range leaked `set -euo pipefail`, and `sed 's/^# \?//'` is a GNU-ism that BSD sed reads as a
   literal `?`, so it never stripped the comment prefixes on the one platform this project supports.
   **Next session: still P0.7 (measure AltTab).**
+- `2026-09-06` — **P0.7 started, not finished.** Built `spike/procmem`: D8's three quantities
+  (`CG raster data`, footprint, peak) read out of `vmmap --summary` for *any* pid, since `spike/memprobe`
+  can only measure itself. Validated against a holder process with a known 366.2 MB — reports 368.8 MB
+  virtual, matching D8 exactly. Installed AltTab 11.6.0 and captured its idle baseline: **27.4 MB
+  footprint, 28.4 MB peak, and no `CG raster data` region at all** (it had never been summoned).
+  Two things learned that P0.7's contract now records: `CG raster` RESIDENT decays fast — the same
+  366 MB reads 368.8 MB when sampled immediately after a touch and **6.4 MB** ~15 s later — so summon-time
+  sampling is mandatory and `Physical footprint (peak)` is the only non-decaying number worth quoting.
+  And AltTab relaunches itself under a new pid on permission grant, which silently killed the first
+  90-sample run; `-name` now re-resolves every sample.
+  **Next session: the measurement still needs a human** to grant Accessibility + Screen Recording and
+  press ⌥⇥ (TCC blocks synthetic keystrokes). Protocol is in `docs/tasks/P0.7.md`.
