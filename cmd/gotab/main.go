@@ -5,6 +5,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -28,6 +29,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "print version and exit")
 	check := flag.Bool("check", false, "report what this process is permitted to do, and exit")
 	list := flag.Bool("list", false, "enumerate windows once and print them, then exit")
+	raw := flag.Bool("raw", false, "with -list: use the CGWindowList candidate set instead of Accessibility")
 	flag.Parse()
 
 	if *showVersion {
@@ -47,7 +49,7 @@ func main() {
 		os.Exit(reportPermissions())
 	}
 	if *list {
-		os.Exit(listWindows())
+		os.Exit(listWindows(*raw))
 	}
 
 	fmt.Fprintf(os.Stderr, "gotab %s: Phase 2 — the switcher is not wired up yet.\n", version)
@@ -74,41 +76,101 @@ func reportPermissions() int {
 	return 1
 }
 
-// listWindows drives P2.2 and prints what came back. This is what verification looks like for the
-// platform layer: it is the humble object, it is not unit-tested (ARCHITECTURE.md#testing), and since
-// D16 defers the rest to Phase 6, running it and reading the output is the check.
-func listWindows() int {
-	ws, err := darwin.NewLister().List(make([]core.Window, 0, 128))
+// listWindows drives the enumeration and prints what came back. This is what verification looks like
+// for the platform layer: it is the humble object, it is not unit-tested (ARCHITECTURE.md#testing), and
+// since D16 defers the rest to Phase 6, running it and reading the output is the check.
+func listWindows(raw bool) int {
+	l := darwin.NewLister()
+	src := darwin.FromAX
+	if raw {
+		src = darwin.FromCoreGraphics
+	}
+
+	ws, err := l.List(make([]core.Window, 0, 128), src)
 	// Not `if err != nil { return }`: List returns the windows it did get alongside ErrTruncated, and
 	// throwing away a partial list because it was labelled partial would be the wrong way round.
+	if err != nil && !errors.Is(err, darwin.ErrTruncated) {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		if errors.Is(err, darwin.ErrNotTrusted) {
+			fmt.Fprintln(os.Stderr, "Accessibility is what knows which windows are switchable (D19).")
+			fmt.Fprintln(os.Stderr, "Try `gotab -list -raw` for the CoreGraphics candidate set instead.")
+		}
+		return 1
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
 	}
 
+	fmt.Printf("%d windows (%s)\n\n", len(ws), sourceName(raw))
+	fmt.Printf("  %-8s %-7s %-5s %-24s %s\n", "ID", "PID", "STATE", "APP", "TITLE")
 	titled := 0
-	for _, w := range ws {
+	for i, w := range ws {
 		if w.Title != "" {
 			titled++
 		}
+		fmt.Printf("  %-8d %-7d %-5s %-24.24s %.60s\n",
+			w.ID, w.App, state(w.Flags, l, i, raw), w.AppName, w.Title)
 	}
 
-	fmt.Printf("%d windows\n\n", len(ws))
-	fmt.Printf("  %-8s %-7s %-3s %-24s %s\n", "ID", "PID", "ON", "APP", "TITLE")
-	for _, w := range ws {
-		fmt.Printf("  %-8d %-7d %-3s %-24.24s %.60s\n",
-			w.ID, w.App, onScreen(w.Flags), w.AppName, w.Title)
-	}
-
-	// The distinction the header of gt_window_list exists to preserve: no title and not allowed to
-	// read the title look identical in the data, and only the grant tells them apart.
-	if titled == 0 && len(ws) > 0 && !darwin.CheckPermissions().ScreenRecording {
+	// The distinction gt_window_list's header exists to preserve: no title and not allowed to read the
+	// title look identical in the data, and only the grant tells them apart.
+	if raw && titled == 0 && len(ws) > 0 && !darwin.CheckPermissions().ScreenRecording {
 		fmt.Fprintln(os.Stderr, "\nEvery title is empty and Screen Recording is not granted — that is why.")
-		fmt.Fprintln(os.Stderr, "Titles of other apps' windows need it; AX titles are the fallback (P2.3).")
 	}
-	if err != nil {
-		return 1
+	if !raw {
+		reportOverlap(l, ws)
 	}
 	return 0
+}
+
+// reportOverlap cross-checks the two enumerations. Both key on CGWindowID, and the only reason the AX
+// list has one at all is the private _AXUIElementGetWindow — so this is the check that the private
+// symbol still returns numbers the rest of the system agrees with, rather than plausible garbage.
+func reportOverlap(l *darwin.Lister, ax []core.Window) {
+	cg, err := l.List(make([]core.Window, 0, 128), darwin.FromCoreGraphics)
+	if err != nil {
+		return
+	}
+	known := make(map[core.WindowID]bool, len(cg))
+	for _, w := range cg {
+		known[w.ID] = true
+	}
+	matched := 0
+	for _, w := range ax {
+		if known[w.ID] {
+			matched++
+		}
+	}
+	fmt.Printf("\n%d of %d AX windows carry an ID CoreGraphics also reports (of %d candidates).\n",
+		matched, len(ax), len(cg))
+}
+
+func sourceName(raw bool) string {
+	if raw {
+		return "CoreGraphics candidates — not the switchable set, see D19"
+	}
+	return "Accessibility — the switchable set"
+}
+
+// state packs the flags into one column. "-" is not "false", it is "this source does not know".
+func state(f core.WindowFlags, l *darwin.Lister, i int, raw bool) string {
+	s := ""
+	if f.Has(core.FlagOnScreen) {
+		s += "o"
+	}
+	if f.Has(core.FlagMinimized) {
+		s += "m"
+	}
+	if f.Has(core.FlagHidden) {
+		s += "h"
+	}
+	if !raw && !l.Standard(i) {
+		s += "d" // dialog, sheet or palette rather than a standard window
+	}
+	if s == "" {
+		return "-"
+	}
+	return s
 }
 
 func onScreen(f core.WindowFlags) string {

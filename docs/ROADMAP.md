@@ -120,12 +120,25 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
       truncate on a character boundary (`CFStringGetBytes`, not `CFStringGetCString`). Observable with
       `gotab -list`. **The find (D19): this is not the switchable set** — 59 layer-0 windows, 7 of them
       switchable.
-- [ ] **P2.3** AX **enumeration** + observer registration; callbacks enqueue only. **Scope grew with
-      D19:** `CGWindowList` over-reports ~8x and its titles vanish without Screen Recording, so
-      `kAXWindowsAttribute` per application — not P2.2's list — is what decides which windows are
-      switchable. P2.2 supplies identity and geometry for the candidates. This is why AltTab is built on
-      AX. The observer half is unchanged: callbacks enqueue and return, nothing else.
-- [ ] **P2.4** SkyLight/CGS notification tap
+- [~] **P2.3** AX enumeration + observers — **split three ways**, following P0.4's precedent. D19 moved
+      enumeration in here; D20 then showed enumeration alone is not enough.
+  - [x] **P2.3a** AX enumeration — `kAXWindowsAttribute` per regular application, one crossing.
+        **Done: 5 switchable windows against CoreGraphics' 59 candidates, and 5 of 5 carry an ID
+        CoreGraphics also reports** — which is the evidence that the private `_AXUIElementGetWindow`
+        returns real window numbers. `FlagMinimized`/`FlagHidden` come from AX rather than a guess, and
+        each app element has a 0.25 s messaging timeout so a wedged app is skipped, not waited on.
+  - [ ] **P2.3b** AX observer registration; callbacks enqueue and return, nothing else. **Blocked on a
+        place to enqueue *to*:** `internal/app` does not exist. That, not this, is the next real task.
+  - [ ] **P2.3c** Join the two enumerations on `CGWindowID` — **new, and required (D20).** AX misses
+        windows CoreGraphics can see: a second Chrome window (`kAXWindows` returned 1 for a process with
+        2) and an `.Accessory` app's ordinary titled window. Both calls succeeded; the answers were just
+        short. CoreGraphics supplies the universe and on-screen state, AX supplies switchability, title
+        and minimized. Acceptance: **every titled layer-0 window is either in the model or excluded for
+        a reason the code can name.**
+- [ ] **P2.4** SkyLight/CGS notification tap **and Space query**. **Promoted by D20:** the likeliest
+      reason AX cannot see Chrome's second window is that it is on another Space, and nothing here
+      confirms that because driving a Space change needs a human. This is the task that turns the guess
+      into a number. `SpaceID` 0 must stay distinguishable from a real Space (P1.0).
 - [ ] **P2.5** Focus / raise / minimize / close actions
 - [ ] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Captures
       ahead of summon, never during it** (D12), and must treat a capture as failable and time-bounded.
@@ -354,4 +367,21 @@ Append one line per session. Newest last. This is how a cold session learns what
   why AltTab is built on Accessibility. P2.2's list becomes the candidate set AX filters. The batching
   discipline is what keeps an 8x over-count cheap: 59 records still cost one crossing.
   **Next session: P2.3 (AX enumeration + observers).** Still serial, one owner.
+- `2026-09-06` — **P2.3a done, and it found the thing that decides Phase 2's shape (D20).** The
+  Accessibility enumeration works and is dramatic: **5 switchable windows against CoreGraphics' 59
+  candidates**, with all 5 carrying an ID CoreGraphics also reports — which is the evidence that
+  matters, because the AX list only has a `CGWindowID` at all through the private
+  `_AXUIElementGetWindow`, and 5 of 5 agreeing with a public API says it returns real numbers.
+  **Then the same run showed AX missing two windows CoreGraphics could see.** A second Chrome window
+  (`kAXWindowsAttribute` returned 1 for a process that has 2) and an `.Accessory` app's perfectly
+  ordinary titled window. Probed both directly rather than guessing: **both AX calls succeeded** — no
+  error, no timeout, no missing grant. The answers were simply short.
+  So **neither enumeration is correct alone**: CoreGraphics sees every window and cannot say which are
+  switchable, AX says which are switchable and cannot see every window. The model must be built from a
+  join on `CGWindowID`, which is now **P2.3c** and is not optional — shipping P2.3a's list alone is a
+  switcher that silently cannot reach a window on another Space. **P2.4 is promoted** to the task that
+  confirms *why*, since "it is on another Space" is currently the likeliest story and not a measurement;
+  driving a Space change needs a human, so V6.2 carries the human half.
+  **Next session: P2.3c (the join), then `internal/app` — P2.3b's callbacks have nowhere to enqueue to
+  until the event loop exists.** Still serial, one owner.
 

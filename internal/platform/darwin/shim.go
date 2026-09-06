@@ -2,7 +2,7 @@ package darwin
 
 /*
 #cgo CFLAGS: -x objective-c -Wall -Wextra -Wno-unused-parameter
-#cgo LDFLAGS: -framework Foundation -framework ApplicationServices -framework CoreGraphics
+#cgo LDFLAGS: -framework Foundation -framework AppKit -framework ApplicationServices -framework CoreGraphics
 #include "shim.h"
 */
 import "C"

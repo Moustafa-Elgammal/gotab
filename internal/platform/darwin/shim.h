@@ -76,6 +76,12 @@ typedef struct {
     uint32_t layer;      // kCGWindowLayer. 0 is an ordinary window; see gt_window_list.
     float alpha;         // 0 means fully transparent, which is how some apps park a window
     int32_t on_screen;   // kCGWindowIsOnscreen
+    // The three below are filled by gt_ax_window_list and left 0 by gt_window_list. CGWindowList
+    // simply does not know them, and 0 there means "not known", not "false" -- the Go wrapper is
+    // responsible for never turning an unknown into a cleared flag.
+    int32_t minimized;   // kAXMinimizedAttribute
+    int32_t hidden;      // the owning application is hidden (Cmd-H). Per app, not per window.
+    int32_t standard;    // subrole is kAXStandardWindowSubrole; 0 means a dialog, palette or sheet
     uint16_t title_len;  // bytes in title, excluding the terminator. 0 means absent OR unpermitted.
     uint16_t app_len;
     char title[GT_TITLE_MAX];
@@ -97,6 +103,19 @@ typedef struct {
 // applications' windows and title_len comes back 0 for all of them. That is not an error and is not
 // reported as one: gt_can_record() is how a caller tells "no title" from "not allowed to see it".
 gt_status gt_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *out_total);
+
+// Enumerates switchable windows through Accessibility, in one crossing, with the same buffer contract
+// as gt_window_list. This is the list the switcher is built on: D19 measured CGWindowList returning 59
+// layer-0 windows where 7 were switchable, and its titles vanish without Screen Recording.
+//
+// Requires the Accessibility grant. Without it every AX call returns kAXErrorAPIDisabled and this
+// returns GT_ERR_NOT_TRUSTED rather than an empty list -- "no windows" and "not allowed to ask" are
+// different answers and a switcher that confuses them shows the user nothing and explains nothing.
+//
+// Every attribute read is Mach IPC into another process, so an unresponsive application could stall
+// enumeration indefinitely. It cannot: each application element gets a messaging timeout, and one that
+// exceeds it is skipped rather than waited on.
+gt_status gt_ax_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *out_total);
 
 // ---------------------------------------------------------------------------
 // Threading

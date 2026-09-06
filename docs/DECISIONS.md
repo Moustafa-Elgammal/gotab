@@ -638,3 +638,53 @@ set it filters, not the window list.
 discipline is what makes an 8x over-count merely wasteful rather than expensive — 59 records cost one
 crossing, and the 52 that get discarded cost nothing but the copy. Filtering earlier, in C, would have
 meant encoding a switchability policy in the layer that is meant to report facts.
+
+---
+
+## D20 · AX is the right filter and the wrong list — 2026-09-06
+
+P2.3a built the Accessibility enumeration D19 called for, and it works: **5 switchable windows against
+CGWindowList's 59 layer-0 candidates**, and all five carried a `CGWindowID` that CoreGraphics also
+reported. That last number is the one that matters most, because the only reason the AX list has an ID
+at all is the private `_AXUIElementGetWindow` — 5 of 5 agreeing with a public API is evidence the
+private symbol returns real window numbers rather than plausible ones.
+
+**Then the same run showed AX missing two windows CoreGraphics could see**, and the two misses have
+different causes:
+
+| window | AX | CoreGraphics | cause |
+|---|---|---|---|
+| Chrome, "Facebook" (id 45) | absent | titled, `IsOnscreen` false | `kAXWindowsAttribute` returned **1** window for a process that has 2 |
+| Notion Calendar (id 1631) | absent | titled | `activationPolicy == .Accessory`, **and** `kAXWindows` returns 0 for it regardless |
+
+Probed directly to separate the two rather than guessing:
+
+    Google Chrome    pid=1079  policy=0  kAXWindows err=0 count=1
+      id=2859  min=0  New chat - Claude - Google Chrome
+    Notion Calendar  pid=31226 policy=1  kAXWindows err=0 count=0
+
+Both calls **succeeded**. This is not an error path, a timeout, or a missing grant — AX answered, and
+its answer was short.
+
+**Conclusion, and it changes the design: neither enumeration is correct alone.** CoreGraphics sees every
+window and cannot say which are switchable; Accessibility says which are switchable and cannot see every
+window. The model has to be built from a **join** on `CGWindowID`, not from either list — CoreGraphics
+supplying the universe and the on-screen state, AX supplying switchability, title and minimized state.
+That is a new task, **P2.3c**, and it is not optional: shipping P2.3a's list alone means a switcher that
+silently cannot reach a window on another Space, which is a headline feature.
+
+**What is not established.** *Why* Chrome's second window is invisible to AX. Another Space is the
+likeliest explanation and matches the received wisdom about `kAXWindowsAttribute`, but nothing here
+confirms it — driving a Space change needs a human (TCC blocks synthesising it, the same wall P0.1 and
+P0.7 hit). It is recorded as unconfirmed and belongs with **V6.2**, which already has a human in front of
+a full-screen app and multiple Spaces. **P2.4's SkyLight Space query is what turns the guess into a
+number**, and it is now load-bearing rather than a refinement.
+
+**The `.Accessory` filter stays**, despite Notion Calendar proving accessory apps own real windows.
+Removing it recovers nothing — AX reports zero windows for that process either way — and it would add
+~50 processes of Mach IPC per enumeration. The gap is real and P2.3c's join is where it gets closed.
+
+**Cost is unmeasured**, per D16. AX enumeration is Mach IPC per attribute per window, which is a very
+different order from D1's 31 ns cgo crossing, and D5's launch-time budget is what it has to fit in. Each
+application element carries a 0.25 s messaging timeout so a wedged app is skipped rather than waited on,
+but no timing number is claimed here. **V6.3** owns it.

@@ -4,6 +4,7 @@
 // is manual retain/release. A half-ARC shim would be worse than a consistent manual one. CoreFoundation
 // and CGImage are outside ARC's remit anyway, and they are what this layer mostly holds.
 #import <Foundation/Foundation.h>
+#import <AppKit/AppKit.h>
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
 #include <stdatomic.h>
@@ -139,6 +140,139 @@ gt_status gt_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *o
     }
 
     CFRelease(list);
+    *out_n = stored;
+    *out_total = total;
+    return GT_OK;
+}
+
+// ---------------------------------------------------------------------------
+// Accessibility enumeration
+// ---------------------------------------------------------------------------
+
+// PRIVATE API, and the whole approach depends on it.
+//
+// The window model is keyed by CGWindowID (core.WindowID, frozen in P1.0) because that is what
+// CGWindowList, ScreenCaptureKit and the WindowServer all speak. Accessibility does not expose that
+// number through any public call. Every serious macOS window manager -- AltTab, Hammerspoon, yabai --
+// uses this symbol for the same reason, which is what makes it safe in practice rather than in theory.
+//
+// It has been present and unchanged since 10.x. If it ever disappears the fallback is matching AX
+// windows to CGWindowList entries by pid plus frame, which is ambiguous for two identically sized
+// windows of one app -- so this is worth the dependency, and worth the comment saying why.
+extern AXError _AXUIElementGetWindow(AXUIElementRef element, CGWindowID *out);
+
+// Seconds an application gets to answer one AX request. An app that is beachballing, paused in a
+// debugger, or swapped out will not answer at all, and the default behaviour is to wait -- which would
+// hang enumeration and therefore the switcher. Skipping a wedged app costs one missing entry;
+// waiting on it costs the whole feature.
+static const float GT_AX_TIMEOUT_SEC = 0.25f;
+
+static bool ax_bool(AXUIElementRef el, CFStringRef attr, bool fallback) {
+    CFTypeRef v = NULL;
+    if (AXUIElementCopyAttributeValue(el, attr, &v) != kAXErrorSuccess || !v) return fallback;
+    bool r = CFGetTypeID(v) == CFBooleanGetTypeID() ? CFBooleanGetValue((CFBooleanRef)v) : fallback;
+    CFRelease(v);
+    return r;
+}
+
+// Copies a string attribute into dst. Returns the byte length, 0 if the attribute is absent -- which
+// for kAXTitleAttribute is a real state: a new untitled document has no title.
+static uint16_t ax_string(AXUIElementRef el, CFStringRef attr, char *dst, int cap) {
+    CFTypeRef v = NULL;
+    if (AXUIElementCopyAttributeValue(el, attr, &v) != kAXErrorSuccess || !v) {
+        if (cap > 0) dst[0] = 0;
+        return 0;
+    }
+    uint16_t n = 0;
+    if (CFGetTypeID(v) == CFStringGetTypeID()) n = copy_cfstring((CFStringRef)v, dst, cap);
+    else if (cap > 0) dst[0] = 0;
+    CFRelease(v);
+    return n;
+}
+
+gt_status gt_ax_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *out_total) {
+    if (!buf || cap < 0 || !out_n || !out_total) return GT_ERR_INTERNAL;
+    *out_n = 0;
+    *out_total = 0;
+
+    // Checked before doing any work: ungranted, every call below returns kAXErrorAPIDisabled and the
+    // result is an empty list that looks exactly like a machine with no windows open.
+    if (!AXIsProcessTrusted()) return GT_ERR_NOT_TRUSTED;
+
+    int32_t stored = 0, total = 0;
+
+    @autoreleasepool {
+        // Regular applications only. NSApplicationActivationPolicyAccessory covers menubar-only agents
+        // and .prohibited covers XPC services -- between them, most of the 52 entries D19 found were
+        // noise. Filtering here is cheaper than filtering their windows later.
+        //
+        // KNOWN MISS, measured (D20): an .Accessory application can own a perfectly ordinary titled
+        // window -- Notion Calendar does. Removing this filter would not recover it, because AX
+        // reports zero windows for that process anyway, so the filter is kept and the gap is recorded
+        // rather than papered over. P2.3c's join against CGWindowList is what finds these.
+        for (NSRunningApplication *app in [[NSWorkspace sharedWorkspace] runningApplications]) {
+            if (app.activationPolicy != NSApplicationActivationPolicyRegular) continue;
+            pid_t pid = app.processIdentifier;
+            if (pid <= 0) continue;
+
+            AXUIElementRef appEl = AXUIElementCreateApplication(pid);
+            if (!appEl) continue;
+            AXUIElementSetMessagingTimeout(appEl, GT_AX_TIMEOUT_SEC);
+
+            CFTypeRef windowsVal = NULL;
+            AXError err = AXUIElementCopyAttributeValue(appEl, kAXWindowsAttribute, &windowsVal);
+            if (err != kAXErrorSuccess || !windowsVal) {
+                // kAXErrorCannotComplete is the timeout, and it is the expected outcome for an app
+                // that is not answering. Not an error for the caller: one app's silence must not
+                // fail everyone else's enumeration.
+                if (windowsVal) CFRelease(windowsVal);
+                CFRelease(appEl);
+                continue;
+            }
+
+            char appName[GT_APPNAME_MAX];
+            uint16_t appLen = copy_cfstring((__bridge CFStringRef)app.localizedName,
+                                            appName, GT_APPNAME_MAX);
+            int32_t appHidden = app.isHidden ? 1 : 0;
+
+            CFArrayRef windows = (CFArrayRef)windowsVal;
+            CFIndex wcount = CFArrayGetCount(windows);
+            for (CFIndex i = 0; i < wcount; i++) {
+                AXUIElementRef win = (AXUIElementRef)CFArrayGetValueAtIndex(windows, i);
+                if (!win) continue;
+
+                CGWindowID wid = 0;
+                if (_AXUIElementGetWindow(win, &wid) != kAXErrorSuccess || wid == 0) {
+                    // No CGWindowID means nothing downstream can key it: not the model, not the
+                    // thumbnail cache, not a raise. Dropping it is the only honest option.
+                    continue;
+                }
+
+                total++;
+                if (stored >= cap) continue;
+
+                gt_window *w = &buf[stored];
+                memset(w, 0, sizeof(*w));
+                w->id = (uint32_t)wid;
+                w->pid = (int32_t)pid;
+                w->hidden = appHidden;
+                w->minimized = ax_bool(win, kAXMinimizedAttribute, false) ? 1 : 0;
+                w->title_len = ax_string(win, kAXTitleAttribute, w->title, GT_TITLE_MAX);
+                w->app_len = appLen;
+                memcpy(w->app, appName, GT_APPNAME_MAX);
+
+                char subrole[64];
+                uint16_t sn = ax_string(win, kAXSubroleAttribute, subrole, sizeof(subrole));
+                w->standard = (sn > 0 && strcmp(subrole, "AXStandardWindow") == 0) ? 1 : 0;
+
+                stored++;
+            }
+
+            CFRelease(windowsVal);
+            CFRelease(appEl);
+        }
+    }
+
     *out_n = stored;
     *out_total = total;
     return GT_OK;
