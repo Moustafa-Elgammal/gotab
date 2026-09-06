@@ -333,3 +333,56 @@ environment, confirmed by `otool -L` showing the framework marked `weak`. **That
 requirement, not a source-level one:** `scripts/build.sh` must set it before Phase 2 ships anything, and
 no plain `go build` of that package will be correct without it. The spike links hard, so that the
 `go run ./spike/sck` in AGENTS.md keeps working.
+
+## D13 · P0.1: the panel is not the problem — 1.3 ms warm, 14 ms cold — 2026-09-06
+
+`spike/panel`, macOS 26.6.2, M-series, 3024x1964 Retina, 8 tiles drawn in one view. Three runs of 30
+warm summons each agreed to within ~1 ms; the numbers below are representative rather than best-case.
+
+| | call returned | drawRect: ran | frame committed |
+|---|---|---|---|
+| cold (first ever summon) | 0.8-4.1 ms | 1.5-4.8 ms | **13.6-18.2 ms** |
+| warm, mean | 1.1-1.3 ms | 0.8 ms | **1.3 ms** |
+| warm, p50 | 0.8 ms | 0.4 ms | 0.8 ms |
+| warm, worst of 30 | 5.5 ms | 5.2 ms | **3.4-5.9 ms** |
+
+**Against a 100 ms budget the panel costs about 1% of it.** That is the headline, and it is the first
+Phase 0 target that comes back with room to spare rather than a constraint. Contrast D12: capture is
+~46 ms and cannot be done on the summon path at all. **The summon budget will be spent on data, not on
+drawing** — which is a good place to be, because data is the part we control.
+
+**"The call returned" is not "the frame is on screen", and the gap is the whole cold cost.** On the
+first summon `orderFrontRegardless` returns in ~1 ms while the frame does not commit for another ~13 ms.
+ALTTAB-LESSONS section 5 predicted this — CoreAnimation commits at the end of the runloop turn — and it
+is why the spike reports three timestamps instead of one. Anything that measured the call returning
+would have reported 1 ms cold and been wrong by an order of magnitude.
+
+**Every warm summon really re-renders.** `drawRect:` was instrumented specifically to rule out the
+alternative reading, that a re-ordered window is served from a cached backing store and the warm number
+is therefore measuring nothing. **0 of 30 warm summons skipped the draw**, in all three runs. The 1.3 ms
+is the cost of actually drawing eight tiles.
+
+**Two honest limits on these numbers.**
+
+- `commit_ms` and `turn_ms` came out *identical to two decimals* on every single sample. The
+  `CATransaction` completion block and the following main-queue block run in the same runloop drain,
+  microseconds apart. So what is measured is "the end of the runloop turn in which the panel was ordered
+  front", which is when CA hands the frame to the render server — **not photons**. Add up to one display
+  refresh (8.3 ms at 120 Hz, 16.7 ms at 60 Hz) for the real thing. Even the pessimistic reading of the
+  worst cold sample is ~35 ms, still a third of the budget.
+- The spike drives a **nested run loop from Go**, which is the opposite of the app's threading rule
+  (ARCHITECTURE.md#threading: the thread is AppKit's forever, Go marshals back). That is fine for
+  measuring and wrong for building; P3.1 must not copy the structure, only the numbers.
+
+**The non-activating panel works.** Style mask `NSWindowStyleMaskBorderless |
+NSWindowStyleMaskNonactivatingPanel`, activation policy `Accessory`, `becomesKeyOnlyIfNeeded`, shown with
+`orderFrontRegardless`: across 20 summons the frontmost application's pid **never changed** (checked
+against `NSWorkspace.frontmostApplication` before and after each). A switcher that deactivates the app
+you are switching away from is broken, and this is the combination that avoids it.
+
+**Not verified, and it needs a human.** `collectionBehavior` is set to `canJoinAllSpaces |
+fullScreenAuxiliary | Stationary`, which is what should make the panel follow the user across Spaces and
+appear *over* a full-screen app rather than behind it. Neither was actually tested — entering full-screen
+and switching Spaces cannot be driven synthetically here (TCC blocks synthetic keystrokes, the same wall
+P0.7 hit). **The settings are prior art from AltTab, not a measurement**, and they are recorded as such.
+This is the one open question P0.1 leaves behind, and full-screen is where switchers most often fail.

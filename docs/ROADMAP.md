@@ -16,7 +16,11 @@ Purpose: settle the platform unknowns that would change the design, before Phase
 **This is de-risking, not a go/no-go** — the project is committed to building the switcher (D10). A Phase 0
 task that comes back negative changes the approach; it does not stop the work.
 
-- [ ] **P0.1** cgo + NSPanel spike — `spike/panel` — a borderless panel shows from Go; measure summon→pixels
+- [x] **P0.1** cgo + NSPanel spike — `spike/panel` — **done (D13): 1.3 ms warm, 14 ms cold — ~1% of the
+      100 ms budget.** Borderless non-activating panel, 8 tiles in one view, verified on screen by
+      screenshot; the frontmost app never changed across 20 summons. "The call returned" is ~1 ms while
+      the cold frame commits at ~14 ms, so measuring the call would have been wrong by 10x.
+      **Still open, needs a human:** behaviour over a full-screen app and across Spaces.
 - [ ] **P0.2** CGEventTap hotkey from Go — `spike/hotkey` — ⌥⇥ captured; measure C→Go callback latency
 - [x] **P0.3** Batched window enumeration — `spike/memory` — **done: 57 ms cold, 0.30 ms warm** for 18 windows
       in one cgo call. Inside budget. See D5 — the cold cost must be paid at launch, not first summon.
@@ -40,8 +44,8 @@ task that comes back negative changes the approach; it does not stop the work.
       goal, so the baseline has nothing to serve. It was measured far enough to be worth keeping (D10's
       numbers) before it was dropped. `spike/procmem` survives it and is the general memory instrument.
 - [ ] **P0.5** Write up results in `docs/DECISIONS.md` — confirm the panel, hotkey and capture unknowns
-      are settled and Phase 2 can be planned against real numbers. Capture is settled (D12); P0.1 and
-      P0.2 remain.
+      are settled and Phase 2 can be planned against real numbers. Capture (D12) and the panel (D13) are
+      settled; **P0.2 is the last one.**
 
 **Phase 0 targets (all must hold):**
 | metric | budget | why |
@@ -204,4 +208,19 @@ Append one line per session. Newest last. This is how a cold session learns what
   half-written code. gofmt is now handed the package list from `go list`. Verified both directions —
   a worktree holding unformatted code leaves the gate green, and unformatted code in the project itself
   still fails it.
+- `2026-09-06` — **P0.1 done, and it is the first Phase 0 target with room to spare.** `spike/panel`
+  puts a borderless, non-activating NSPanel on screen from Go — verified by screenshot, not by the
+  absence of an error — with eight tiles drawn in a single view, which is P3.1's shape rather than a
+  flattering empty window. **1.3 ms warm, 14 ms cold: about 1% of the 100 ms budget.** Set against D12's
+  ~46 ms capture, this settles where the summon budget goes: on data, not on drawing.
+  Two things the measurement had to defend against. `orderFrontRegardless` returns in ~1 ms while the
+  cold frame does not commit for ~14 ms, exactly as ALTTAB-LESSONS predicted, so timing the call would
+  have been wrong by 10x — the spike reports three timestamps instead. And `drawRect:` is instrumented
+  to prove the warm number is a real re-render: 0 of 30 warm summons skipped the draw. The
+  non-activating combination works — the frontmost app's pid never changed across 20 summons.
+  **One thing is deliberately not claimed:** behaviour over a full-screen app and across Spaces. The
+  `collectionBehavior` flags are AltTab's prior art, not a measurement, and TCC blocks driving either
+  synthetically. That needs a human and is the open half of P0.1.
+  **Next session: P0.2 (CGEventTap hotkey), the last Phase 0 unknown**, then P0.5 closes the phase and
+  Phase 2 begins — serial, one owner.
 
