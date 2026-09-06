@@ -113,8 +113,18 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
       TCC grants. **The find:** once real ObjC is compiled, clang and not the Go linker sets the
       deployment target — the `.app` declared macOS 11 and required macOS 26. `build.sh` now derives
       both from one variable and fails the build if a slice disagrees.
-- [ ] **P2.2** Batched window query — one call → packed array
-- [ ] **P2.3** AX observer registration; callbacks enqueue only
+- [x] **P2.2** Batched window query — one call → packed array — **done.** `gt_window_list` fills a
+      caller-allocated array of fixed-size records in one crossing regardless of window count; Go
+      composes `core.Window` from it. No flag bits in C: `core.WindowFlags` is frozen and a second copy
+      of those values is the drift AGENTS.md warns about, so C reports facts and Go decides. Titles
+      truncate on a character boundary (`CFStringGetBytes`, not `CFStringGetCString`). Observable with
+      `gotab -list`. **The find (D19): this is not the switchable set** — 59 layer-0 windows, 7 of them
+      switchable.
+- [ ] **P2.3** AX **enumeration** + observer registration; callbacks enqueue only. **Scope grew with
+      D19:** `CGWindowList` over-reports ~8x and its titles vanish without Screen Recording, so
+      `kAXWindowsAttribute` per application — not P2.2's list — is what decides which windows are
+      switchable. P2.2 supplies identity and geometry for the candidates. This is why AltTab is built on
+      AX. The observer half is unchanged: callbacks enqueue and return, nothing else.
 - [ ] **P2.4** SkyLight/CGS notification tap
 - [ ] **P2.5** Focus / raise / minimize / close actions
 - [ ] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Captures
@@ -329,4 +339,19 @@ Append one line per session. Newest last. This is how a cold session learns what
   Patterns anchored (`/gotab`, `/spike/spike`) and the package committed. The gate could not have caught
   this — it checks the working tree, not what a clone would contain — so it stays V6.7's job, which now
   has a real failure to catch rather than a hypothetical one.
+- `2026-09-06` — **P2.2 done, and it says something uncomfortable about P2.3.** One crossing returns
+  every window as a packed array of fixed-size records; the crossing count does not grow with N, which
+  is the cgo rule made concrete. Two design points worth keeping: there are **no flag bits in C** —
+  `core.WindowFlags` is frozen, a second copy in C is exactly the drift AGENTS.md warns about, so C
+  reports facts (layer, alpha, on-screen) and Go composes the flags — and titles use
+  `CFStringGetBytes` rather than `CFStringGetCString`, so an over-long title truncates on a character
+  boundary instead of failing outright or emitting invalid UTF-8. Window titles are full of emoji and
+  CJK; this is the common case.
+  **D19 is the find.** On a normal session `CGWindowList` returns 82 windows, 59 after dropping
+  `kCGWindowLayer != 0`, of which **7** are things a user could switch to. The titled seven were exactly
+  right — but the title is not a filter either: it is empty for everything without Screen Recording, and
+  a real untitled document window exists. So **P2.3 owns enumeration, not just observation**, which is
+  why AltTab is built on Accessibility. P2.2's list becomes the candidate set AX filters. The batching
+  discipline is what keeps an 8x over-count cheap: 59 records still cost one crossing.
+  **Next session: P2.3 (AX enumeration + observers).** Still serial, one owner.
 

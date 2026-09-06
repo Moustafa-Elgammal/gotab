@@ -594,3 +594,47 @@ formatting, vet, tests, the `core` purity invariant — and structurally could n
 runs against the working tree rather than against what the working tree would produce. That is a gap in
 what "green" means, not an argument for a bigger checklist. **V6.7 already builds from a clean state and
 is where this belongs**; it now has a concrete failure it must catch, rather than a hypothetical one.
+
+---
+
+## D19 · CGWindowList over-reports switchable windows by ~8x — 2026-09-06
+
+P2.2's first real run, on an ordinary session with Screen Recording granted:
+
+| | count |
+|---|---|
+| `CGWindowListCopyWindowInfo`, `kCGWindowListOptionAll` | 86 |
+| with `ExcludeDesktopElements`, all layers | 82 |
+| after dropping `kCGWindowLayer != 0` | **59** |
+| of those, carrying a `kCGWindowName` | **7** |
+| of those, `kCGWindowIsOnscreen` | 5 |
+
+Counts are one snapshot of one session and drift by a few as windows open and close; the ratio is the
+finding, not the digits. `ExcludeDesktopElements` earns almost nothing on its own (86 → 82) — the layer
+filter is what does the work.
+
+The seven titled windows were exactly the seven a user would expect in a switcher: two Chrome windows,
+System Settings, Notion Calendar, Docker Desktop, GoLand, Activity Monitor. The other 52 were XPC view
+services (`CursorUIViewService`, `AutoFill`, `WidgetControlViewService`), `loginwindow`, thumbnail
+extensions, and several untitled auxiliary windows per application.
+
+**Layer 0 is necessary and nowhere near sufficient.** The filter is worth keeping — it removes a third
+of the list and everything it removes is genuinely not a window — but a switcher built on `CGWindowList`
+alone would show its user roughly eight entries of noise for every real one.
+
+**The title is a far better discriminator, and it is still the wrong one to build on.** It is empty for
+all of these on a machine without Screen Recording (P2.2 handles that case explicitly), and a real
+window is allowed to have no title — a fresh untitled document is the obvious example. Something that
+works on this machine today and shows nothing on a machine without a TCC grant is not a filter, it is a
+coincidence.
+
+**Consequence: P2.3 is load-bearing, not an enhancement.** Accessibility's `kAXWindowsAttribute` per
+application is what actually enumerates switchable windows, which is why AltTab is built on AX and uses
+`CGWindowList` only for identity and geometry. The roadmap had P2.3 as "AX observer registration;
+callbacks enqueue only" — observation. It also owns *enumeration*, and P2.2's output is the candidate
+set it filters, not the window list.
+
+**What did not change.** P2.2's contract stands: one crossing, packed array, no per-window call. That
+discipline is what makes an 8x over-count merely wasteful rather than expensive — 59 records cost one
+crossing, and the 52 that get discarded cost nothing but the copy. Filtering earlier, in C, would have
+meant encoding a switchability policy in the layer that is meant to report facts.
