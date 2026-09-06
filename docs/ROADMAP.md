@@ -127,8 +127,9 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
         CoreGraphics also reports** — which is the evidence that the private `_AXUIElementGetWindow`
         returns real window numbers. `FlagMinimized`/`FlagHidden` come from AX rather than a guess, and
         each app element has a 0.25 s messaging timeout so a wedged app is skipped, not waited on.
-  - [ ] **P2.3b** AX observer registration; callbacks enqueue and return, nothing else. **Blocked on a
-        place to enqueue *to*:** `internal/app` does not exist. That, not this, is the next real task.
+  - [ ] **P2.3b** AX observer registration; callbacks enqueue and return, nothing else.
+        **Unblocked by P2.7** — `Loop.Rescan` and `Loop.Post` are the enqueue targets, and both are
+        non-blocking by construction (D22), which is what a callback needs. This is the next task.
   - [x] **P2.3c** Join the two enumerations on `CGWindowID` — **done (D21): 58 candidates + 5 AX → 7
         switchable, with both of D20's misses recovered and 0 titled windows excluded.** The rule is
         `activation policy is not prohibited` AND `has a title`; policy alone admitted 37 untitled
@@ -140,7 +141,14 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
       reason AX cannot see Chrome's second window is that it is on another Space, and nothing here
       confirms that because driving a Space change needs a human. This is the task that turns the guess
       into a number. `SpaceID` 0 must stay distinguishable from a real Space (P1.0).
-- [ ] **P2.5** Focus / raise / minimize / close actions
+- [x] **P2.7** `internal/app` — the event loop. **Done (D22).** Listed out of order because it was
+      missing from the roadmap entirely: `ARCHITECTURE.md` has had `internal/app` in its diagram from
+      the start and no task ever built it, which P2.3b surfaced by having nowhere to enqueue to. One
+      goroutine owns `Model`, `Order` and `Selection`; no mutex in the package. `Post` never blocks and
+      a full queue drops; `Rescan` is a depth-1 latch where dropping is *correct*. Re-enumeration
+      preserves MRU by upserting with a zero `FocusSeq`. Observable with `gotab -watch`.
+- [ ] **P2.5** Focus / raise / minimize / close actions — **the next thing that makes the app do
+      something.** `Loop.Activate` is a state change with no raise behind it until this lands.
 - [ ] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Captures
       ahead of summon, never during it** (D12), and must treat a capture as failable and time-bounded.
       **`assumption`:** that a 50-window cache at Retina resolution stays inside a sane bound. D14
@@ -402,4 +410,22 @@ Append one line per session. Newest last. This is how a cold session learns what
   guess, and it was not made here.
   **Next session: `internal/app` — the event loop.** P2.3b's observers have had nowhere to enqueue to
   since D20, and it is now the only thing between here and a switcher that reacts to anything.
+- `2026-09-06` — **P2.7 done: `internal/app` exists, and it was never on the roadmap.** ARCHITECTURE has
+  had it in the four-layer diagram since the project started and no task ever built it; P2.3b surfaced
+  the omission by having nowhere to enqueue to. One goroutine owns `Model`, `Order` and `Selection`, and
+  there is no mutex in the package — if a second goroutine ever needs the model the fix is to move that
+  caller onto the loop, not to lock it.
+  **D22 is the design decision.** A blocking channel send inside a platform callback is a bug with a
+  name: the system disables a tap whose callback is too slow, which is the failure mode P0.2's spike
+  already handles explicitly. So `Post` is non-blocking always, and that forces a decision about a full
+  queue that differs by event. Discrete events get a depth-256 buffer and a drop is reported; "the window
+  set changed" gets a **depth-1 latch where dropping is correct**, because the pending signal already
+  means re-read everything — twenty notifications during a Space switch coalesce into one enumeration.
+  **MRU preservation turned out to be an argument value, not a branch.** Rescan touches every window
+  every pass and upserts with a zero `FocusSeq`, which `Model.Upsert` reads as "preserve". Observed 12
+  rescans over 6 seconds producing one state print — the order did not churn. That shows enumeration is
+  stable; it does not exercise a title changing mid-run, which core already pins in
+  `TestModelUpsertZeroFocusPreserves`.
+  **Next session: P2.3b (AX observers, now unblocked), then P2.5 (raise).** P2.5 is the one that makes
+  the app do something: `Loop.Activate` is a state change with nothing behind it until then.
 

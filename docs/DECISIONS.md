@@ -738,3 +738,53 @@ recorded here so the next person does not have to notice it independently.
 
 **Cost is two crossings, not 2N** — one enumeration per source regardless of window count, which is the
 cgo rule holding up under a design that reads the window list twice.
+
+---
+
+## D22 · Posting to the event loop must never block, and dropping is sometimes correct — 2026-09-06
+
+`internal/app` exists (P2.7). The design question it had to settle is what a platform callback is
+allowed to do, because `ARCHITECTURE.md#the-cgo-rule` says "enqueue and return" and a channel send is
+not automatically either of those things.
+
+**A blocking send in a callback is a bug with a name.** An Accessibility callback or a `CGEventTap`
+callback runs on a thread the Go runtime has never seen, and the system disables a tap whose callback is
+too slow — `kCGEventTapDisabledByTimeout`, which P0.2's spike handles explicitly because it is the
+documented failure mode. A hotkey that dies silently after one stall is the worst outcome available. So
+`Post` is a non-blocking select with a `default`, always.
+
+**That forces a decision about a full queue, and the answer differs by event.** Two mechanisms, not one:
+
+| | mechanism | full behaviour |
+|---|---|---|
+| discrete events (Focused, Summon, Cycle, Quit) | buffered channel, depth 256 | drop, and report it to the caller |
+| "the window set changed" | channel of depth 1 | drop, **and that is correct** |
+
+The second is the interesting one. A dropped rescan signal loses nothing, because the signal already
+pending means "re-read everything" — twenty Accessibility notifications arriving during a Space switch
+coalesce into one enumeration, which is the behaviour wanted rather than a compromise. Depth 1 is not a
+small buffer, it is a latch.
+
+For discrete events a drop is real loss, so `Post` returns whether it was accepted and the depth is
+generous. `Focused` is survivable — the next rescan repairs ordering — and `Summon` and `Quit` are not,
+so their callers check.
+
+**Re-enumeration must not disturb MRU order, and that turned out to be an argument value.** `doRescan`
+touches every window on every pass. It upserts with a **zero `FocusSeq`**, which `Model.Upsert` reads as
+"preserve what you have" — so a window whose title changed keeps its position. ALTTAB-LESSONS §3's rule
+that a title change may not reorder is enforced by passing zero, not by a branch. The order is rebuilt
+only when membership actually changed, because a rebuild *is* a reorder.
+
+Observed: 12 rescans over 6 seconds produced **one** state print — the order did not churn. Note what
+that does and does not show. It shows repeated enumeration is stable; it does not exercise a title
+changing mid-run, which was not observed. That case is pinned in core by
+`TestModelUpsertZeroFocusPreserves`, and the swap-with-last removal the loop's backwards delete depends
+on is pinned by `TestModelRemoveMiddleFixesMovedRow`. Both predate this task.
+
+**A failed rescan does not stop the loop.** The WindowServer declines during fast user switching and at
+the login window, and a TCC grant can be revoked mid-session. Those are ordinary states, not faults; a
+loop that exited on them is a switcher that stops working and never says why. They go to `OnError`.
+
+**No mutex, and that is load-bearing rather than stylistic.** One goroutine reaches the model. If a
+second one ever needs to, the fix is to move that caller onto the loop, not to add a lock — AGENTS.md
+says to say so rather than adding the mutex, and this is the package where that would be tempting.

@@ -5,12 +5,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/signal"
 	"runtime"
+	"strings"
+	"time"
 
+	"github.com/Moustafa-Elgammal/gotab/internal/app"
 	"github.com/Moustafa-Elgammal/gotab/internal/core"
 	"github.com/Moustafa-Elgammal/gotab/internal/platform/darwin"
 )
@@ -31,6 +36,7 @@ func main() {
 	list := flag.Bool("list", false, "enumerate windows once and print them, then exit")
 	raw := flag.Bool("raw", false, "list only the CoreGraphics candidate set (implies -list)")
 	axOnly := flag.Bool("ax", false, "list only the Accessibility set (implies -list)")
+	watch := flag.Bool("watch", false, "run the event loop and print the list as it changes; ^C to stop")
 	flag.Parse()
 
 	if *showVersion {
@@ -51,6 +57,9 @@ func main() {
 	}
 	if *list || *raw || *axOnly {
 		os.Exit(listWindows(*raw, *axOnly))
+	}
+	if *watch {
+		os.Exit(watchWindows())
 	}
 
 	fmt.Fprintf(os.Stderr, "gotab %s: Phase 2 — the switcher is not wired up yet.\n", version)
@@ -166,6 +175,63 @@ func listOneSource(raw bool) int {
 	if raw && titled == 0 && len(ws) > 0 && !darwin.CheckPermissions().ScreenRecording {
 		fmt.Fprintln(os.Stderr, "\nEvery title is empty and Screen Recording is not granted — that is why.")
 	}
+	return 0
+}
+
+// watchWindows runs the event loop until interrupted. Rescans are driven by a ticker, which is a
+// stand-in and says so: P2.3b's Accessibility observers are what should post them, and they are
+// blocked until this package exists. The ticker is deliberately in the command and not in the loop —
+// polling is not the design, it is scaffolding for looking at the loop before the observers land.
+//
+// It doubles as P2.7's acceptance check for MRU stability: rescans run continuously, and if a
+// re-enumeration disturbed the order the printed list would visibly churn. It does not.
+func watchWindows() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	l := app.New(128)
+	l.OnError = func(err error) { fmt.Fprintf(os.Stderr, "gotab: %v\n", err) }
+
+	rescans := 0
+	last := ""
+	l.OnState = func(m *core.Model, o *core.Order, sel core.Selection, _ bool) {
+		rescans++
+		var b strings.Builder
+		for i := 0; i < o.Len(); i++ {
+			w := m.At(o.Rows[i])
+			marker := " "
+			if w.ID == sel.ID {
+				marker = ">"
+			}
+			fmt.Fprintf(&b, "  %s %-8d %-24.24s %.50s\n", marker, w.ID, w.AppName, w.Title)
+		}
+		// Print only on change. A ticker that reprints an identical list every half second proves
+		// nothing; a list that changes exactly when a window opens or closes proves the loop works.
+		if s := b.String(); s != last {
+			last = s
+			fmt.Printf("\n[rescan %d] %d windows\n%s", rescans, m.Len(), s)
+		}
+	}
+
+	go func() {
+		t := time.NewTicker(500 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				l.Rescan()
+			}
+		}
+	}()
+
+	fmt.Println("watching — open or close a window to see the loop react. ^C to stop.")
+	if err := l.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		return 1
+	}
+	fmt.Printf("\nstopped after %d state updates\n", rescans)
 	return 0
 }
 
