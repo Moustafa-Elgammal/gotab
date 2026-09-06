@@ -28,6 +28,9 @@ Non-goals: cross-platform, macOS < 11 (Go's linker forces `minos 11.0` — measu
   internal/platform/darwin     cgo + Objective-C. All IPC, all AppKit, all bitmaps.
 ```
 
+Only `cmd/gotab` and the `spike/` probes exist today; `internal/app`, `internal/core/api.go`, and the
+`darwin` implementation are Phase 1+. The diagram is the target, not the current tree.
+
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
 

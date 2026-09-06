@@ -22,6 +22,7 @@ repeated here — restating them is what makes two copies drift apart.
 | task | command |
 |---|---|
 | the gate — run before calling anything done | `./scripts/check.sh` |
+| run a Phase 0 spike | `go run ./spike/memprobe` — each `spike/<name>/` is a standalone `package main`; macOS + cgo only |
 | build `build/GoTab.app` | `./scripts/build.sh` |
 | install for real use | `./scripts/install.sh` |
 | remove it | `./scripts/uninstall.sh` |
@@ -30,7 +31,8 @@ repeated here — restating them is what makes two copies drift apart.
 | worktree for a parallel task | `./scripts/wt.sh new P1.3` |
 
 `check.sh` runs gofmt, vet, tests, and mechanically enforces that `internal/core` imports neither cgo nor
-`internal/platform`. Green here is a precondition for merging, not a nicety.
+`internal/platform`. It deliberately does **not** `set -e`: every step runs, so one invocation reports all
+four failures rather than only the first. Green here is a precondition for merging, not a nicety.
 
 ## Go style
 

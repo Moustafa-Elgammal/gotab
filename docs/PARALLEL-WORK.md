@@ -20,11 +20,11 @@ One worktree per task, so agents never share a checkout:
 ```bash
 scripts/wt.sh new P1.3        # git worktree add ../gotab-wt/P1.3 -b feat/P1.3
 scripts/wt.sh list
-scripts/wt.sh done P1.3       # merge to master, remove worktree, prune branch
+scripts/wt.sh done P1.3       # merge to main, remove worktree, prune branch
 ```
 
 Convention: worktrees live in `../gotab-wt/<TASK-ID>`, branch `feat/<TASK-ID>`. Never two agents in one
-worktree. Never an agent on `master`.
+worktree. Never an agent on `main`.
 
 ## Connected context — how agents share understanding
 

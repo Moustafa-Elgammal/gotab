@@ -127,3 +127,12 @@ Append one line per session. Newest last. This is how a cold session learns what
   **D9 is the uncomfortable part: macOS already evicts idle thumbnails, so the bounded-LRU win may be
   small.** That makes P0.7 (measure AltTab) the deciding task — do it before designing the cache.
   **Next session: P0.7.**
+- `2026-09-06` — Docs/tooling repair, no code change. The repo's only branch is `main`, but `scripts/wt.sh
+  done` ran `git checkout master`, CI's push trigger watched `master`, and `PARALLEL-WORK.md` said the
+  same — the first merged worktree would have failed. All switched to `main`. Also documented how to run a
+  spike (`go run ./spike/<name>`), why `check.sh` omits `set -e` (all four steps report, not just the
+  first), and noted in `ARCHITECTURE.md` that its four-layer diagram is the target, not the current tree —
+  only `cmd/gotab` and `spike/` exist today. Fixed two bugs in `wt.sh`'s usage output while there: the
+  line range leaked `set -euo pipefail`, and `sed 's/^# \?//'` is a GNU-ism that BSD sed reads as a
+  literal `?`, so it never stripped the comment prefixes on the one platform this project supports.
+  **Next session: still P0.7 (measure AltTab).**
