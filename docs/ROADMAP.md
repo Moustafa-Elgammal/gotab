@@ -265,22 +265,34 @@ is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slice
 
 ---
 
-## Phase 5 — Polish
+## Phase 5 — Polish (complete; V6.10/V6.11 verify with a human / a host)
 
 Carved for a 3-way fan-out (like Phases 2 and 3): `internal/i18n` and
 `internal/update/update.go` are frozen API, `scripts/build.sh` and `cmd/gotab` are the integrator's,
 and each task below owns a disjoint file set. See `docs/tasks/P5.{1,2,3}.md`.
 
-- [~] **P5.1** Localization scaffold — `feat/P5.1` — `internal/i18n` (pure Go, embedded `en`,
-      `<locale>.lproj/gotab.json` overrides) proven end to end on the permissions dialog, with a `de`
-      overlay exercising the loader. CLI/settings/panel strings are a later pass.
-- [~] **P5.2** VoiceOver / accessibility — `feat/P5.2` — the panel exposes its tiles as accessibility
-      elements (title + app label) and announces the selection on each cycle; every settings control
-      gets a spoken label. **`assumption`:** written against the AppKit API, never heard by a screen
-      reader → **V6.10**.
-- [~] **P5.3** Update mechanism — `feat/P5.3` — **decided: plain version check, pure Go, no Sparkle
-      (D39).** `internal/update.Check` fetches a JSON manifest, compares versions, reports whether a
-      newer build exists; `gotab -check-update` is the entry point. No download/install.
+**All three landed (D39–D41).** The permissions onboarding alert and its CLI lines resolve through a
+two-runtime string catalog with a `de` proof; the switcher panel and the settings window expose
+themselves to a screen reader; `gotab -check-update` really fetches and compares a release manifest.
+None of it has been *heard* by VoiceOver or run against a live update host — those are V6.10 / V6.11.
+
+- [x] **P5.1** Localization scaffold — `feat/P5.1` — `internal/i18n` (pure Go, embedded `en`,
+      `<locale>.lproj/gotab.json` overrides) proven end to end on the permissions dialog:
+      `permissions.m` draws its NSAlert through `NSLocalizedString`, and a `de` overlay
+      (`Localizable.strings` + `gotab.json`) exercises both loaders. CLI usage / settings / panel
+      strings are a later pass (D40).
+- [x] **P5.2** VoiceOver / accessibility — `feat/P5.2` — `panel.m`'s content view is an accessibility
+      container exposing one `NSAccessibilityElement` per tile (title + app label, button role,
+      flipped-space frame, selected bit) and posting a high-priority announcement + a selection
+      notification on each cycle; `settings.m` labels the steppers, the Appearance popup, the
+      blocked-apps field and the hotkey recorder. Press is a no-op — `panel.h` exposes no raise
+      callback and is frozen; activation still travels the modifier-release path.
+      **`assumption`:** written against the AppKit API, never heard by a screen reader → **V6.10**.
+- [x] **P5.3** Update mechanism — `feat/P5.3` — **plain version check, pure Go, stdlib only, no
+      Sparkle (D39).** `internal/update.Check` GETs `FeedURL` (5 s-bounded, 64 KiB cap), decodes the
+      JSON manifest (`manifest.go`), and compares the numeric version triple (`version.go`);
+      `gotab -check-update` is the entry point. `min_macos` is decoded but not yet enforced. No
+      download / install (needs notarization the ad-hoc bundle lacks — D38).
       **`assumption`:** only run against a local manifest, `FeedURL` has no host → **V6.11**.
 
 ---
@@ -308,6 +320,8 @@ coming back badly changes Phase 2/3 code rather than merely reporting on it.
 | **V6.7** | Ship the bundle (P4.5) | the bundle, its plist, the ad-hoc signature, the weak-SCK link, and the `install.sh`/`uninstall.sh` round-trip are all done and self-verified (D38). This is the machine half: `build/GoTab.app` launches from `/Applications` on a genuinely clean account (Gatekeeper allows a quarantined ad-hoc copy only after a right-click → Open, or notarization), and on a real macOS 12 host (`minos`/plist *agree*; a 12.0 binary *running* on 12.0 is untested — D17) | a machine |
 | **V6.8** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` still reports **0 allocs/op** for summon, cycle and dismiss after Phases 2–5 have wired real data through | — |
 | **V6.9** | Permissions onboarding (P4.3) | from a **revoked** state, `-switch` shows the alert, and granting in Settings brings the switcher up **without a relaunch** — the 750 ms poll picks it up. Both grants. The headless fallback and the poll are already exercised (D36); this is the modal + the human loop | a human |
+| **V6.10** | VoiceOver heard, not just written (P5.2) | with VoiceOver on (or Accessibility Inspector), driving `gotab -switch`: each tile is announced as "&lt;title&gt;, &lt;app&gt;", the selection is spoken on **every** ⌥⇥ cycle, and the panel reads as a container labelled "Window switcher". In `gotab -settings` every control — the steppers, the Appearance popup, the blocked-apps field, the hotkey recorder — has a spoken label. An agent host has no screen reader (D41) | a human |
+| **V6.11** | Update check against a real host (P5.3) | `gotab -check-update` run against the **published** `FeedURL` (not a `python3 -m http.server` copy): a manifest advertising a higher version prints the "available" line, an equal/older one prints "up to date", and an unreachable host prints the one-line warning and exits 0. `FeedURL` has no host today (D39/D41) | a host + a published manifest |
 
 **A task contract goes in `docs/tasks/V6.N.md` before that task starts**, same as every other numbered
 task. They are deliberately not written yet: what V6.5 and V6.6 actually have to check depends on what
@@ -685,4 +699,32 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next: integrate P5.1/P5.2/P5.3 as they land — `[x]` them here, add V6.10 (VoiceOver heard by a
   human) and V6.11 (update check against a real host), and note `internal/i18n` / `internal/update`
   in `ARCHITECTURE.md`.**
+- `2026-09-07` — **Phase 5 integrated and closed (D41). All three fan-out branches landed.** P5.1
+  was complete in its worktree; P5.3 was uncommitted work finished and verified here; P5.2 was
+  unstarted and built this session. Merged `merge: P5.1` / `merge: P5.3` / `merge: P5.2`, then this
+  consolidation.
+  **P5.1 (D40, carve):** `permissions.m`'s six alert strings go through `NSLocalizedString`;
+  `resources/{en,de}.lproj/Localizable.strings` for AppKit and `resources/de.lproj/gotab.json` for
+  Go, key sets matching `en.json` exactly, `plutil -lint` clean. Scratch check confirmed the loader:
+  default → English, `SetLocale("de")` + `Load` → German, back to `en` → English.
+  **P5.2 (D41):** `GTTileView` is now an accessibility container (group role, "Window switcher");
+  each tile is a `GTTileElement : NSAccessibilityElement` (button role, `"<title>, <app>"` label,
+  `accessibilityFrameInParentSpace` = the tile's own top-left frame, `isAccessibilitySelected`).
+  `panel_populate` posts `NSAccessibilityAnnouncementRequestedNotification` (High) +
+  `SelectedChildrenChanged` when the selection moves and `LayoutChanged` when the count changes;
+  `g_a11y_last_*` debounce it, `gt_panel_hide` re-arms it. `settings.m` labels the two steppers, the
+  Appearance popup, the blocked-apps field and the hotkey recorder. Press is a deliberate no-op
+  (`panel.h` frozen, no raise callback) — activation still travels modifier-release.
+  **P5.3 (D39, carve):** `internal/update` GETs `FeedURL` (5 s / 64 KiB bounded), decodes the
+  manifest (`manifest.go`, rejects trailing data / blank version|url), compares the numeric triple
+  (`version.go`, leading `v` and `-suffix`/`+build` dropped, missing fields = 0). Verified end to
+  end against a local `http.server`: available / up-to-date / bad-URL / dev paths all correct.
+  Stdlib only. `min_macos` decoded, not enforced.
+  Two new Phase 6 rows: **V6.10** (VoiceOver actually heard — a human) and **V6.11** (the check run
+  against a published `FeedURL` — needs a host). `ARCHITECTURE.md` now names `internal/i18n` and
+  `internal/update` in the layer map. `check.sh` green on `main`; `build.sh` links the signed
+  universal `.app`.
+  **Next: Phase 6 — verification.** The switcher is feature-complete; what remains is the V6
+  checklist run against the assembled app, most of it needing a human at a Mac (V6.1, V6.2, V6.9,
+  V6.10) or a machine/host (V6.7, V6.11). V6.1/V6.2 are the cheap Phase 0/3 debts to run first.
 

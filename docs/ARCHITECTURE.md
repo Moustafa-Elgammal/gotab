@@ -29,6 +29,8 @@ assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
         │                      ordering · filtering · search · selection · tab groups · layout
         │
   internal/prefs  ◄── pure Go. The settings schema; the store is behind a Reader/Writer.
+  internal/i18n   ◄── pure Go. String catalog: embedded en.json + a <locale>.lproj/gotab.json overlay.
+  internal/update ◄── pure Go, stdlib only. Fetches a release manifest and compares versions.
         │
   internal/platform/darwin     cgo + Objective-C. All IPC, all AppKit, all bitmaps, the prefs store.
 ```
@@ -38,12 +40,20 @@ enumerates the switchable set (with each window's Space), observes window events
 closes windows (Phase 2, D24–D27), draws the panel sized for its display, prefetches thumbnails,
 tracks the appearance, taps a configurable hotkey (Phase 3, D28–D33), reads/writes the CFPreferences
 domain, shows a native settings window, onboards missing permissions, and ships as a signed universal
-`.app` (Phase 4 complete, D34–D38). `internal/prefs` is the pure-Go settings schema. `internal/app`
-owns the event loop — one goroutine, no mutex (P2.7 / D22) — and it filters the window set through
-`core.Rules` (P4.4). `cmd/gotab` with no flags runs the switcher from inside `.app`; `-settings`,
-`-permissions`, `-prefs`, `-check`, `-watch` are the rest. Nothing has run any of it on a real screen
-— an agent host has no window server — so the pixels, the granted hotkey round trip, the settings
-window, the permissions modal, and a clean-account launch are Phase 6's (V6.1–V6.5, V6.7, V6.9).
+`.app` (Phase 4 complete, D34–D38). The panel and the settings window expose themselves to a screen
+reader and the permissions alert resolves through `NSLocalizedString` (Phase 5, D39–D41).
+`internal/prefs` is the pure-Go settings schema. `internal/i18n` is the pure-Go string catalog —
+`T(key)` over an embedded `en.json` with an optional `<locale>.lproj/gotab.json` overlay, swapped
+through an atomic pointer, no cgo (locale detection is deferred, D40); AppKit reads the sibling
+`Localizable.strings` for the same locale. `internal/update` is pure Go, standard library only —
+`Check` GETs a JSON manifest and compares versions, no Sparkle (D39); it downloads nothing.
+`internal/app` owns the event loop — one goroutine, no mutex (P2.7 / D22) — and it filters the window
+set through `core.Rules` (P4.4). `cmd/gotab` with no flags runs the switcher from inside `.app`;
+`-settings`, `-permissions`, `-prefs`, `-check`, `-check-update`, `-watch` are the rest. Nothing has
+run any of it on a real screen — an agent host has no window server, and none has been heard by a
+screen reader — so the pixels, the granted hotkey round trip, the settings window, the permissions
+modal, a clean-account launch, VoiceOver, and the update check against a live host are Phase 6's
+(V6.1–V6.5, V6.7, V6.9–V6.11).
 
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
@@ -124,9 +134,14 @@ code without a number and is carried as an explicit assumption into V6.1. What P
 where the 100 ms summon budget goes: on data, not on pixels, and not on capture, which cannot happen on
 the summon path at all.
 
-Phases 2 and 3 both began "serial" and both fanned out once their shared surface was frozen — the C
-shim for Phase 2 (`7e7751e`), `panel.h` for Phase 3. Both are closed: Phase 2 in D24–D27, Phase 3 in
-D28–D33. `gotab -switch` is the switcher — ⌥⇥ tap → enumerate → order → lay out → draw → prefetch →
-restyle → raise, on a live run loop. **The only Phase 3 debt is on-screen verification** (V6.1–V6.5):
-an agent host has no window server, so the pixels and the granted hotkey round trip are unseen, and a
-bad result there sends work back into Phase 3. Next is Phase 4 (Product). See [ROADMAP.md](ROADMAP.md).
+Phases 2, 3 and 5 each began "serial" and each fanned out once its shared surface was frozen — the C
+shim for Phase 2 (`7e7751e`), `panel.h` for Phase 3, `internal/i18n` + `internal/update/update.go`
+for Phase 5. All closed: Phase 2 in D24–D27, Phase 3 in D28–D33, Phase 4 in D34–D38, Phase 5 in
+D39–D41. `gotab -switch` is the switcher — ⌥⇥ tap → enumerate → order → lay out → draw → prefetch →
+restyle → raise, on a live run loop — with a settings window, permissions onboarding, an installer,
+a localized permissions alert, a screen-reader-visible panel, and `gotab -check-update`.
+
+**All that is left is Phase 6 — verification against the assembled app.** An agent host has no window
+server and no screen reader, so the pixels, the granted hotkey round trip, VoiceOver, a clean-account
+launch, and the update check against a live host are unseen (V6.1–V6.11); a bad result there sends
+work back into the phase that produced it. See [ROADMAP.md](ROADMAP.md).
