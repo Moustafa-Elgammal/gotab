@@ -1,7 +1,9 @@
 // Command gotab is the GoTab window switcher.
 //
-// Phase 2: the platform layer links and can report what the process is allowed to do. It does not
-// switch windows yet. See docs/ROADMAP.md for what is built and what is next.
+// Phase 3: `gotab -switch` puts the real panel on screen — enumerate, order, lay out, draw, prefetch
+// thumbnails, restyle with the system appearance — driven by the event loop with a live AppKit run
+// loop. There is no hotkey yet (P0.2 is a spike; wiring ⌥⇥ into the loop is still its own task), so
+// -switch scripts one summon so the pipeline is demonstrable. See docs/ROADMAP.md.
 package main
 
 import (
@@ -37,6 +39,7 @@ func main() {
 	raw := flag.Bool("raw", false, "list only the CoreGraphics candidate set (implies -list)")
 	axOnly := flag.Bool("ax", false, "list only the Accessibility set (implies -list)")
 	watch := flag.Bool("watch", false, "run the event loop and print the list as it changes; ^C to stop")
+	switchMode := flag.Bool("switch", false, "show the real switcher panel (scripted summon; ^C to stop)")
 	flag.Parse()
 
 	if *showVersion {
@@ -61,9 +64,12 @@ func main() {
 	if *watch {
 		os.Exit(watchWindows())
 	}
+	if *switchMode {
+		os.Exit(runSwitcher())
+	}
 
-	fmt.Fprintf(os.Stderr, "gotab %s: Phase 2 — the switcher is not wired up yet.\n", version)
-	fmt.Fprintln(os.Stderr, "Try `gotab -check`, or see docs/ROADMAP.md for the current task.")
+	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch to see the panel, -watch for the text loop, or -check.\n", version)
+	fmt.Fprintln(os.Stderr, "A hotkey to summon it on ⌥⇥ is not wired yet — see docs/ROADMAP.md.")
 	os.Exit(1)
 }
 
@@ -252,6 +258,140 @@ func watchWindows() int {
 	}
 	fmt.Printf("\nstopped after %d state updates\n", rescans)
 	return 0
+}
+
+// runSwitcher brings the whole Phase 3 pipeline up: the panel and its appearance, the event loop, the
+// Accessibility observers, a thumbnail prefetcher, and — on the main thread — the AppKit run loop that
+// makes all of it composite. It scripts one summon because nothing posts one yet (P0.2's hotkey is a
+// spike, and giving ⌥⇥ its own path into the loop is a task of its own, the way internal/app was).
+func runSwitcher() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	if err := darwin.CreatePanel(); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		return 1
+	}
+	// P3.4's finding: a pre-create ApplyTheme cannot be replayed, so it is called here, right after
+	// CreatePanel and before the first show. Idempotent, no IPC.
+	if err := darwin.ApplyTheme(); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: theme: %v\n", err)
+	}
+
+	l := app.New(128)
+	l.OnError = func(err error) { fmt.Fprintf(os.Stderr, "gotab: %v\n", err) }
+
+	pf := darwin.NewPrefetcher(64)
+	r := &panelRenderer{opts: core.LayoutOpts{Scale: 2, MaxCols: 7}, pf: pf}
+	l.OnState = r.onState
+
+	// Restyle on a Light/Dark flip. onChange runs on the main thread and ApplyTheme is non-blocking.
+	if err := darwin.WatchAppearance(func() { darwin.ApplyTheme() }); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: appearance watch: %v\n", err)
+	}
+
+	if err := darwin.StartObservers(l.Rescan); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: observers unavailable (%v) — the panel will not track window changes\n", err)
+	}
+
+	loopDone := make(chan error, 1)
+	go func() { loopDone <- l.Run(ctx) }()
+	go demoDriver(ctx, l)
+
+	// Shutdown ordering matters: drain the prefetcher and observers while the main queue is still
+	// being serviced, hide the panel, then break the run loop.
+	go func() {
+		<-loopDone
+		pf.Stop()
+		darwin.StopObservers()
+		darwin.StopWatchingAppearance()
+		darwin.OnMain(darwin.HidePanel)
+		darwin.StopRunLoop()
+	}()
+
+	fmt.Println("switcher up — panel summoned, selection cycling; ^C to stop.")
+	darwin.RunLoop() // blocks on this (the main) thread until StopRunLoop
+	return 0
+}
+
+// panelRenderer bridges the event loop's state to the platform renderer. Its onState runs on the loop
+// goroutine; every AppKit call marshals to the main thread through darwin.OnMain.
+type panelRenderer struct {
+	opts   core.LayoutOpts
+	pf     *darwin.Prefetcher
+	shown  bool
+	frames []core.Rect // reused across summons; core.Layout stays 0-alloc
+}
+
+func (r *panelRenderer) onState(m *core.Model, o *core.Order, sel core.Selection, visible bool) {
+	if !visible {
+		if r.shown {
+			r.shown = false
+			r.pf.Want(nil)
+			darwin.OnMain(darwin.HidePanel)
+		}
+		return
+	}
+
+	n := o.Len()
+	res := core.Layout(n, r.opts, r.frames[:0])
+	r.frames = res.Tiles
+
+	// Fresh slices per call: they are handed to an async OnMain closure and to pf.Want, and the loop
+	// goroutine would otherwise overwrite a reused backing array before the main thread reads it.
+	// One small allocation per state change; the summon-path 0-alloc goal is V6.8's to enforce here.
+	tiles := make([]darwin.Tile, n)
+	reqs := make([]darwin.ThumbRequest, n)
+	for i := 0; i < n; i++ {
+		w := m.At(o.Rows[i])
+		f := res.Tiles[i]
+		tiles[i] = darwin.Tile{
+			X: f.X, Y: f.Y, W: f.W, H: f.H,
+			Selected: w.ID == sel.ID,
+			Title:    w.Title,
+			Subtitle: w.AppName,
+		}
+		reqs[i] = darwin.ThumbRequest{
+			Window: w.ID, Tile: i,
+			Width: f.W * res.Scale, Height: f.H * res.Scale,
+		}
+	}
+
+	pw, ph := res.Panel.W, res.Panel.H
+	first := !r.shown
+	r.shown = true
+	darwin.OnMain(func() {
+		if first {
+			darwin.ShowPanel(tiles, pw, ph)
+		} else {
+			darwin.UpdatePanel(tiles)
+		}
+	})
+	r.pf.Want(reqs)
+}
+
+// demoDriver scripts the summon the missing hotkey would post: wait for the first enumeration, show
+// the panel, then step the selection forward on a slow tick so the update path is visible too. ^C
+// (ctx cancel) ends it; it deliberately never posts Activate, so running the demo does not reorder
+// the user's windows.
+func demoDriver(ctx context.Context, l *app.Loop) {
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(600 * time.Millisecond): // let doRescan land a first window set
+	}
+	l.Post(app.Event{Kind: app.Summon})
+
+	t := time.NewTicker(1500 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			l.Post(app.Event{Kind: app.Cycle, Dir: core.Forward})
+		}
+	}
 }
 
 // state packs the flags into one column. "-" is not "false", it is "no source knew".

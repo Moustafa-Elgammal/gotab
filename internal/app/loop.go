@@ -147,8 +147,16 @@ func (l *Loop) handle(e Event) bool {
 	case Dismiss:
 		l.visible = false
 	case Activate:
-		// Raising is P2.5's. Dismissing is not, and doing it here would mean the switcher closes
-		// before anything has been raised — so Activate stays a state change until P2.5 lands.
+		// P2.5 landed, so this is a real switch now: raise the selected window, then hide. The raise
+		// is Mach IPC and can take up to the messaging timeout — acceptable on this goroutine
+		// (action.go), and it must precede the hide or the panel vanishes before anything moves. A
+		// stale selection (window closed mid-summon) comes back ErrNoWindow and goes to OnError; the
+		// switcher still dismisses.
+		if l.sel.ID != 0 {
+			if err := darwin.Raise(l.sel.ID); err != nil && l.OnError != nil {
+				l.OnError(fmt.Errorf("activate window %d: %w", l.sel.ID, err))
+			}
+		}
 		l.visible = false
 	case Quit:
 		return true
