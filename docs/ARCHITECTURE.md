@@ -101,9 +101,10 @@ macOS demands AppKit on the main thread; Go wants to schedule goroutines freely.
 - `internal/platform` — **not unit-tested.** It is the humble object: IPC and AppKit only, verified at
   runtime by the spikes and by hand. Do not chase coverage here.
 - Every core package ships `doc.go` stating its invariants in prose. Agents read that instead of the source.
-- **Since D16, new work writes no tests as it goes.** Verification is batched into Phase 6. That changes
-  *when* things are checked, not what is checkable: the two bullets above still decide where coverage
-  can meaningfully live, and `scripts/check.sh` must stay green throughout.
+- **New work writes no tests as it goes, in any phase** (D16, generalised in D23). Verification is
+  batched into the final phase. That changes *when* things are checked, not what is checkable: the two
+  bullets above still decide where coverage can meaningfully live, and `scripts/check.sh` must stay
+  green throughout.
 
 ## Status
 

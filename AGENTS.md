@@ -79,8 +79,10 @@ A wrong comment costs several times more than a missing one. Write for low drift
 
 - **A task is done only when `docs/ROADMAP.md` is updated in the same commit.** That file is how a cold
   session learns where things stand; skipping it is how this project gets lost.
-- **Don't write tests alongside the work (D16).** Phases 2–5 are done when the code is written and
-  `scripts/check.sh` is still green; verification is batched into Phase 6. This means writing no *new*
+- **Don't write tests alongside the work — ever (D16, generalised in D23).** A task in any phase is
+  done when the code is written and `scripts/check.sh` is still green. **All verification lands in the
+  final phase**, which is Phase 6 today and is whatever the last phase is if more are added; a new
+  phase does not get its own tests, it gets more rows in that table. This means writing no *new*
   per-task tests — it does **not** mean deleting the suite that exists or letting the gate go red.
   When you take a design decision that a deferred test would have caught, tag it **`assumption`** in
   `docs/ROADMAP.md` at the task that depends on it and point it at its V6 task. An assumption written

@@ -788,3 +788,39 @@ loop that exited on them is a switcher that stops working and never says why. Th
 **No mutex, and that is load-bearing rather than stylistic.** One goroutine reaches the model. If a
 second one ever needs to, the fix is to move that caller onto the loop, not to add a lock — AGENTS.md
 says to say so rather than adding the mutex, and this is the package where that would be tempting.
+
+---
+
+## D23 · Deferred verification is the standing rule, not a Phase 2–5 exception — 2026-09-07
+
+**Decision:** D16 deferred per-task tests and measurements for Phases 2–5 specifically. That scope is
+removed. **No task in any phase writes tests as it goes; all verification accumulates in the final
+phase** — Phase 6 today, and whatever the last phase is if more are added. A new phase does not bring
+its own test burden with it; it brings more rows to that table.
+
+**Why generalise rather than re-decide it each phase.** The rule was stated in three places
+(`AGENTS.md`, `ARCHITECTURE.md`, `PARALLEL-WORK.md`) and all three said "Phases 2–5". A phase-scoped
+rule expires silently: the session that opens Phase 3 has to notice the scope, decide whether it still
+applies, and update three files that will otherwise disagree — which is the drift AGENTS.md exists to
+prevent. The reasoning in D16 was never specific to Phases 2–5 anyway.
+
+**What this buys, stated as the reason it was asked for:** time and tokens. Writing a test beside each
+Phase 2 task costs roughly as much as the task, and for `internal/platform` it buys almost nothing —
+ARCHITECTURE.md already rules that layer out of unit testing, so a per-task test there would mostly be
+a mock asserting that the code calls the API it obviously calls. Batching also tests the thing that
+actually matters: subsystems composing, which no per-task test observes.
+
+**What did NOT change, and these are what keep the deferral honest rather than merely cheap:**
+
+- `scripts/check.sh` stays the merge gate and stays green. Deferring means writing no *new* per-task
+  tests; it never means deleting the suite that exists or letting the gate go red.
+- A decision a deferred test would have caught is tagged **`assumption`** in `docs/ROADMAP.md` at the
+  task that depends on it, pointing at the verification task that settles it.
+- A box is never `[x]` on a number nobody believes. P0.2 remains the worked example: complete code, no
+  measurement, deliberately still `[~]`.
+
+**The cost is unchanged from D16 and is not being talked out of.** A negative in the final phase sends
+work back into an earlier one rather than being absorbed locally. D16 listed four assumptions riding on
+this; P2.4 has since retired part of one and P2.6 has added two more (weak-linking, and a live-image
+counter with no producer). The mitigation is visibility — an assumption written down where it is used
+is recoverable; one carried in someone's head is what makes the rework expensive.
