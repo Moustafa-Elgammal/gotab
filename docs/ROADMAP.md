@@ -101,9 +101,13 @@ Independent, testable, no macOS needed. **This is where multi-agent parallelism 
 
 ---
 
-## Phase 2 — Platform bridge (serial, one owner)
+## Phase 2 — Platform bridge (was serial; fans out from P2.3b on)
 
-Shares the C shim and the main thread. **Do not fan out.** One agent, sequential.
+P2.1 through P2.3c were built by one owner, sequentially, because every task wanted to edit `shim.h`
+and `shim.m`. That was a fact about the file layout rather than about the work, and carving one file
+pair per task removed it: **P2.3b, P2.4, P2.5 and P2.6 run in parallel**, one worktree each, against a
+frozen `shim.{h,m,go}` / `window.go` / `doc.go`. See PARALLEL-WORK.md for the ownership table — and
+note that `ROADMAP.md`, `DECISIONS.md` and all wiring stay with the integrator, not the agents.
 
 - [x] **P2.1** C shim skeleton + cgo build integration — **done, and it caught a shipped bug (D17).**
       `internal/platform/darwin` compiles Objective-C, links, and ships in the universal `.app`; the
@@ -127,7 +131,7 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
         CoreGraphics also reports** — which is the evidence that the private `_AXUIElementGetWindow`
         returns real window numbers. `FlagMinimized`/`FlagHidden` come from AX rather than a guess, and
         each app element has a 0.25 s messaging timeout so a wedged app is skipped, not waited on.
-  - [ ] **P2.3b** AX observer registration; callbacks enqueue and return, nothing else.
+  - [~] **P2.3b** AX observer registration; callbacks enqueue and return, nothing else.
         **Unblocked by P2.7** — `Loop.Rescan` and `Loop.Post` are the enqueue targets, and both are
         non-blocking by construction (D22), which is what a callback needs. This is the next task.
   - [x] **P2.3c** Join the two enumerations on `CGWindowID` — **done (D21): 58 candidates + 5 AX → 7
@@ -137,7 +141,7 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
         TCC grant:** CoreGraphics titles need Screen Recording, so without it the recovery branch is
         inert and the list degrades to the AX set — reported by `MissingRecovery`, not hidden. The lead
         that would remove that dependency (`kCGWindowBounds` needs no grant) is recorded in D21.
-- [ ] **P2.4** SkyLight/CGS notification tap **and Space query**. **Promoted by D20:** the likeliest
+- [~] **P2.4** SkyLight/CGS notification tap **and Space query**. **Promoted by D20:** the likeliest
       reason AX cannot see Chrome's second window is that it is on another Space, and nothing here
       confirms that because driving a Space change needs a human. This is the task that turns the guess
       into a number. `SpaceID` 0 must stay distinguishable from a real Space (P1.0).
@@ -147,9 +151,9 @@ Shares the C shim and the main thread. **Do not fan out.** One agent, sequential
       goroutine owns `Model`, `Order` and `Selection`; no mutex in the package. `Post` never blocks and
       a full queue drops; `Rescan` is a depth-1 latch where dropping is *correct*. Re-enumeration
       preserves MRU by upserting with a zero `FocusSeq`. Observable with `gotab -watch`.
-- [ ] **P2.5** Focus / raise / minimize / close actions — **the next thing that makes the app do
+- [~] **P2.5** Focus / raise / minimize / close actions — **the next thing that makes the app do
       something.** `Loop.Activate` is a state change with no raise behind it until this lands.
-- [ ] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Captures
+- [~] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Captures
       ahead of summon, never during it** (D12), and must treat a capture as failable and time-bounded.
       **`assumption`:** that a 50-window cache at Retina resolution stays inside a sane bound. D14
       measured 8.3 MB for 20 tiles at 400 px, which is the shape and not the number → **V6.4**
