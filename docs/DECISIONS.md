@@ -1369,3 +1369,58 @@ still → **V6.2**.
 **V6.7** is now purely the machine half: a first launch from `/Applications` on a genuinely clean
 account, and on a real macOS 12 host (the `minos`/plist check proves they *agree*, not that a 12.0
 binary *runs* — D17). No icon yet (`CFBundleIconFile` absent); that needs artwork and is Phase 5.
+
+---
+
+## D39 · P5.3: the updater is a plain version check, not Sparkle — 2026-09-07
+
+The roadmap left P5.3 as "decide: Sparkle via cgo, or plain download". **Decided: a plain check.**
+`internal/update` is pure Go, standard library only — `Check(ctx, current)` does an HTTPS GET of a
+small JSON manifest, compares versions, and returns whether a newer build exists and its URL. It does
+not download, verify, or relaunch anything. `gotab -check-update` is the entry point; a launch-time
+check is a later, optional addition.
+
+Why not Sparkle:
+
+- **The bundle is ad-hoc signed (D38).** Sparkle's value is in-place download-and-relaunch, and that
+  story only holds with a Developer ID signature + notarization — a `spctl`-rejected ad-hoc app that
+  replaces itself is not something to ship. Until notarization exists (V6.7's machine half), Sparkle
+  would be infrastructure with nothing to stand on.
+- **Clean break.** The project inherits nothing from AltTab — no Keychain, no preference migration,
+  no Sparkle continuity (D6, ARCHITECTURE.md). AltTab vendors Sparkle, AppCenter and ShortcutRecorder
+  (ALTTAB-LESSONS.md); GoTab vendors nothing and this keeps it that way.
+- **cgo cost and surface.** Sparkle is an Objective-C framework — another weak link, another
+  `SUPublicEDKey` in the plist, an EdDSA signing step in `build.sh`, an appcast host. A `net/http`
+  GET and a 30-line semver compare is the whole of the alternative.
+
+**assumption → V6.11:** `FeedURL` (`https://gotab.app/appcast/latest.json`) has no host and the check
+has only run against a local file. Downloading + verifying + relaunching a new build is explicitly
+out of scope — it is a separate task gated on notarization, not a V6 row.
+
+---
+
+## D40 · P5.1: the i18n scaffold — one .lproj dir, two file formats, and a locale punt — 2026-09-07
+
+`internal/i18n` is pure Go (embedded `en.json` as the single source of truth for the key set; a
+non-English locale is a partial overlay merged over it, swapped through an `atomic.Pointer` so `T`
+reads lock-free after a startup `SetLocale`/`Load`).
+
+Three shape decisions worth recording:
+
+- **Two file formats per locale, by necessity.** GoTab's user-facing strings live in two runtimes.
+  Go code calls `i18n.T` and reads `<locale>.lproj/gotab.json`. Objective-C in
+  `internal/platform/darwin` calls `NSLocalizedString`, which AppKit resolves from
+  `<locale>.lproj/Localizable.strings` in the bundle — that path is not ours to change. So each
+  locale is one `.lproj` directory holding both files, kept in step by hand. A single format would
+  mean either teaching Go to parse `.strings` or stopping AppKit from doing the lookup it does for
+  free; both cost more than mirroring a dozen keys.
+- **Locale selection is `GOTAB_LOCALE` → `LANG`, for now.** The correct source is
+  `CFLocaleCopyPreferredLanguages` / `AppleLanguages`, which is cgo — and `internal/i18n` is
+  deliberately cgo-free so it stays in the pure layer with `core` and `prefs`. A
+  `darwin.PreferredLanguages()` feeding `cmd/gotab`'s `initLocale()` is the follow-up; the env vars
+  cover development and the `de` proof in the meantime.
+- **Scaffold, not a sweep.** Only the permissions onboarding strings (the NSAlert and the CLI
+  prompt/wait lines) are routed through `i18n` in this pass, with a `de` overlay that exists to
+  exercise the loader rather than to ship German. The CLI usage text, the settings window and the
+  panel are a later migration — doing them now would have collided with P5.2 (`settings.m`,
+  `panel.m`) and bought nothing the scaffold does not already prove.

@@ -5,6 +5,10 @@
 // orders, lays out and draws, prefetches thumbnails, and restyles with the system appearance, all on a
 // live AppKit run loop. Without the Accessibility grant the tap cannot install, and -switch falls back
 // to a scripted summon so the render pipeline is still demonstrable. See docs/ROADMAP.md.
+//
+// The other flags are utilities: -settings, -permissions, -watch, -prefs, -check, and -check-update
+// (ask the release feed whether a newer build is out). User-facing onboarding strings resolve through
+// internal/i18n, keyed off GOTAB_LOCALE / LANG.
 package main
 
 import (
@@ -20,8 +24,10 @@ import (
 
 	"github.com/Moustafa-Elgammal/gotab/internal/app"
 	"github.com/Moustafa-Elgammal/gotab/internal/core"
+	"github.com/Moustafa-Elgammal/gotab/internal/i18n"
 	"github.com/Moustafa-Elgammal/gotab/internal/platform/darwin"
 	"github.com/Moustafa-Elgammal/gotab/internal/prefs"
+	"github.com/Moustafa-Elgammal/gotab/internal/update"
 )
 
 // version is injected by scripts/build.sh via -ldflags.
@@ -45,12 +51,17 @@ func main() {
 	prefsMode := flag.Bool("prefs", false, "print effective preferences; with Key=Value args, set them and exit")
 	settingsMode := flag.Bool("settings", false, "open the settings window")
 	permMode := flag.Bool("permissions", false, "check the grants, explain any that are missing, and wait for them")
+	checkUpdate := flag.Bool("check-update", false, "ask the release feed whether a newer GoTab is out, and exit")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println(version)
 		return
 	}
+
+	// Locale before any user-facing string. Pure Go, no platform dependency, so
+	// it does not matter that this runs before darwin.Init. See docs/DECISIONS.md D40.
+	initLocale()
 
 	// Before any other platform call. gt_init touches the display subsystem, which CoreGraphics
 	// requires of a non-AppKit process before its first capture (D12) — the failure mode is abort(),
@@ -62,6 +73,9 @@ func main() {
 
 	if *check {
 		os.Exit(reportPermissions())
+	}
+	if *checkUpdate {
+		os.Exit(runCheckUpdate())
 	}
 	if *permMode {
 		os.Exit(runPermissions())
@@ -87,7 +101,7 @@ func main() {
 	if runningInBundle() {
 		os.Exit(runSwitcher())
 	}
-	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch, -settings, -permissions, -watch, -prefs or -check.\n", version)
+	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch, -settings, -permissions, -watch, -prefs, -check or -check-update.\n", version)
 	os.Exit(1)
 }
 
@@ -117,6 +131,34 @@ func reportPermissions() int {
 	return 1
 }
 
+// runCheckUpdate is `gotab -check-update`: ask the release feed whether a newer build exists and
+// print the answer. A network problem never fails the process — a feed that cannot be reached just
+// means "not now". A development build is skipped outright: "git describe" output and the literal
+// "dev" have nothing to compare against a release number. See internal/update and D39.
+func runCheckUpdate() int {
+	if version == "dev" {
+		fmt.Println(i18n.T("update.devBuild", version))
+		return 0
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	res, err := update.Check(ctx, version)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, i18n.T("update.checkFailed", err))
+		return 0
+	}
+	if res.Available {
+		fmt.Println(i18n.T("update.available", res.Latest, res.Current, res.URL))
+		if res.Notes != "" {
+			fmt.Println("  " + res.Notes)
+		}
+		return 0
+	}
+	fmt.Println(i18n.T("update.upToDate", version))
+	return 0
+}
+
 // stderrIsTTY reports whether stderr is a terminal. gotab launched from Finder has no terminal, and a
 // modal alert is the only channel; from a shell the alert would steal focus for information the user
 // can read inline, so the terminal path prints instead.
@@ -131,6 +173,32 @@ func stderrIsTTY() bool {
 func runningInBundle() bool {
 	exe, err := os.Executable()
 	return err == nil && strings.Contains(exe, ".app/Contents/MacOS/")
+}
+
+// resourcesDir is where the bundled locale files live: Contents/Resources for the binary inside
+// GoTab.app, and ./resources from a source checkout. i18n.Load reads <dir>/<locale>.lproj/gotab.json.
+func resourcesDir() string {
+	if exe, err := os.Executable(); err == nil {
+		if i := strings.Index(exe, ".app/Contents/MacOS/"); i >= 0 {
+			return exe[:i] + ".app/Contents/Resources"
+		}
+	}
+	return "resources"
+}
+
+// initLocale picks the UI language and loads its catalog. GOTAB_LOCALE wins; otherwise LANG, which on
+// a login shell reads like "de_DE.UTF-8" (i18n normalizes it). Proper macOS system-locale detection
+// wants CFLocale — cgo the i18n package deliberately does without — so it is a later addition on the
+// darwin side (D40). English needs no file and is always present, so a load error is only a warning.
+func initLocale() {
+	tag := os.Getenv("GOTAB_LOCALE")
+	if tag == "" {
+		tag = os.Getenv("LANG")
+	}
+	i18n.SetLocale(tag)
+	if err := i18n.Load(resourcesDir()); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: locale %s: %v\n", i18n.Locale(), err)
+	}
 }
 
 const (
@@ -149,12 +217,12 @@ func promptForGrants(needAX, needSR bool) bool {
 		}
 		// No window server — fall through to the printed path.
 	}
-	fmt.Fprintln(os.Stderr, "gotab: grant the missing permission in System Settings › Privacy & Security:")
+	fmt.Fprintln(os.Stderr, i18n.T("perm.cli.grantPrompt"))
 	if needAX {
-		fmt.Fprintln(os.Stderr, "  Accessibility     "+paneAccessibility)
+		fmt.Fprintln(os.Stderr, "  "+i18n.T("perm.cli.accessibilityLabel")+"  "+paneAccessibility)
 	}
 	if needSR {
-		fmt.Fprintln(os.Stderr, "  Screen Recording  "+paneScreenRecord)
+		fmt.Fprintln(os.Stderr, "  "+i18n.T("perm.cli.screenRecordingLabel")+"  "+paneScreenRecord)
 	}
 	if needAX {
 		darwin.OpenPrivacyPane("accessibility")
@@ -211,7 +279,7 @@ func ensurePermissions(ctx context.Context) bool {
 	p := darwin.CheckPermissions()
 	if p.Accessibility {
 		if !p.ScreenRecording {
-			fmt.Fprintln(os.Stderr, "gotab: Screen Recording is off — no thumbnails, and no titles for other apps.")
+			fmt.Fprintln(os.Stderr, i18n.T("perm.cli.screenRecordingOff"))
 		}
 		return true
 	}
@@ -220,17 +288,17 @@ func ensurePermissions(ctx context.Context) bool {
 		return false // user chose Quit
 	}
 
-	fmt.Fprintln(os.Stderr, "gotab: waiting for Accessibility — grant it in System Settings; ^C to stop.")
+	fmt.Fprintln(os.Stderr, i18n.T("perm.cli.waitingAccessibility"))
 	deadline := time.Now().Add(5 * time.Minute)
 	for ctx.Err() == nil && time.Now().Before(deadline) {
 		time.Sleep(750 * time.Millisecond)
 		if darwin.CheckPermissions().Accessibility {
-			fmt.Fprintln(os.Stderr, "gotab: Accessibility granted — starting.")
+			fmt.Fprintln(os.Stderr, i18n.T("perm.cli.accessibilityGranted"))
 			return true
 		}
 	}
 	if ctx.Err() == nil {
-		fmt.Fprintln(os.Stderr, "gotab: Accessibility still not granted — quitting. Re-open GoTab after granting it.")
+		fmt.Fprintln(os.Stderr, i18n.T("perm.cli.accessibilityStillMissing"))
 	}
 	return false
 }

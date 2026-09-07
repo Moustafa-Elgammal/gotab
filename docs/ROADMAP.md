@@ -267,9 +267,21 @@ is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slice
 
 ## Phase 5 — Polish
 
-- [ ] **P5.1** Localization scaffold
-- [ ] **P5.2** VoiceOver / accessibility
-- [ ] **P5.3** Update mechanism (decide: Sparkle via cgo, or plain download)
+Carved for a 3-way fan-out (like Phases 2 and 3): `internal/i18n` and
+`internal/update/update.go` are frozen API, `scripts/build.sh` and `cmd/gotab` are the integrator's,
+and each task below owns a disjoint file set. See `docs/tasks/P5.{1,2,3}.md`.
+
+- [~] **P5.1** Localization scaffold — `feat/P5.1` — `internal/i18n` (pure Go, embedded `en`,
+      `<locale>.lproj/gotab.json` overrides) proven end to end on the permissions dialog, with a `de`
+      overlay exercising the loader. CLI/settings/panel strings are a later pass.
+- [~] **P5.2** VoiceOver / accessibility — `feat/P5.2` — the panel exposes its tiles as accessibility
+      elements (title + app label) and announces the selection on each cycle; every settings control
+      gets a spoken label. **`assumption`:** written against the AppKit API, never heard by a screen
+      reader → **V6.10**.
+- [~] **P5.3** Update mechanism — `feat/P5.3` — **decided: plain version check, pure Go, no Sparkle
+      (D39).** `internal/update.Check` fetches a JSON manifest, compares versions, reports whether a
+      newer build exists; `gotab -check-update` is the entry point. No download/install.
+      **`assumption`:** only run against a local manifest, `FeedURL` has no host → **V6.11**.
 
 ---
 
@@ -658,4 +670,19 @@ Append one line per session. Newest last. This is how a cold session learns what
   prefetches, restyles, and raises, driven by a configurable ⌥⇥, with a settings window, onboarding,
   and an installer. What is left is Phase 5 polish and the V6 checklist a human runs on a Mac
   (V6.1–V6.5, V6.7, V6.9).
+- `2026-09-07` — **Phase 5 carved for a 3-way fan-out; agents dispatched.** The carve commit froze
+  the shared surface, exactly as `7e7751e` did for Phase 2 and the `panel.h` freeze for Phase 3:
+  new `internal/i18n` (pure Go — `T(key)`, embedded `en.json`, `<locale>.lproj/gotab.json`
+  overrides via an atomic swap, no per-call lock) and new `internal/update` with `update.go`'s
+  `Check` / `Result` / `FeedURL` frozen and a stub `check` in `http.go`. `scripts/build.sh` now
+  bundles `resources/*.lproj/` + `resources/appcast/` and declares `CFBundleLocalizations`
+  (`en`, `de`). `cmd/gotab` gained `-check-update` (calls `update.Check`; short-circuits a `dev`
+  build) and `initLocale()` (`GOTAB_LOCALE` → `LANG`), and its permissions-onboarding strings now
+  resolve through `i18n.T`. **Two decisions locked:** P5.3 is a plain version check, not Sparkle
+  (**D39**); the i18n `.strings`/`.json` split and locale-selection punt are **D40**. `check.sh`
+  green on the carve. Contracts in `docs/tasks/P5.{1,2,3}.md`; `internal/i18n/*.go`,
+  `internal/update/update.go`, `build.sh`, `cmd/gotab/`, `internal/app/` frozen for the duration.
+  **Next: integrate P5.1/P5.2/P5.3 as they land — `[x]` them here, add V6.10 (VoiceOver heard by a
+  human) and V6.11 (update check against a real host), and note `internal/i18n` / `internal/update`
+  in `ARCHITECTURE.md`.**
 
