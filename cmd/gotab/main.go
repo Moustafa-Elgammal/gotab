@@ -21,6 +21,7 @@ import (
 	"github.com/Moustafa-Elgammal/gotab/internal/app"
 	"github.com/Moustafa-Elgammal/gotab/internal/core"
 	"github.com/Moustafa-Elgammal/gotab/internal/platform/darwin"
+	"github.com/Moustafa-Elgammal/gotab/internal/prefs"
 )
 
 // version is injected by scripts/build.sh via -ldflags.
@@ -40,7 +41,8 @@ func main() {
 	raw := flag.Bool("raw", false, "list only the CoreGraphics candidate set (implies -list)")
 	axOnly := flag.Bool("ax", false, "list only the Accessibility set (implies -list)")
 	watch := flag.Bool("watch", false, "run the event loop and print the list as it changes; ^C to stop")
-	switchMode := flag.Bool("switch", false, "show the real switcher panel (scripted summon; ^C to stop)")
+	switchMode := flag.Bool("switch", false, "run the switcher: ⌥⇥ summons, ⌥ held cycles, release raises; ^C to stop")
+	prefsMode := flag.Bool("prefs", false, "print effective preferences; with Key=Value args, set them and exit")
 	flag.Parse()
 
 	if *showVersion {
@@ -65,11 +67,14 @@ func main() {
 	if *watch {
 		os.Exit(watchWindows())
 	}
+	if *prefsMode {
+		os.Exit(runPrefs(flag.Args()))
+	}
 	if *switchMode {
 		os.Exit(runSwitcher())
 	}
 
-	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch for the switcher, -watch for the text loop, or -check.\n", version)
+	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch for the switcher, -watch for the text loop, -prefs or -check.\n", version)
 	os.Exit(1)
 }
 
@@ -260,20 +265,23 @@ func watchWindows() int {
 	return 0
 }
 
-// runSwitcher brings the whole Phase 3 pipeline up: the panel and its appearance, the event loop, the
-// Accessibility observers, a thumbnail prefetcher, and — on the main thread — the AppKit run loop that
-// makes all of it composite. It scripts one summon because nothing posts one yet (P0.2's hotkey is a
-// spike, and giving ⌥⇥ its own path into the loop is a task of its own, the way internal/app was).
+// runSwitcher brings the whole switcher up: the panel and its appearance, the event loop, the
+// Accessibility observers, a thumbnail prefetcher, the ⌥⇥ tap, and — on the main thread — the AppKit
+// run loop that makes all of it composite. Settings come from the CFPreferences domain (P4.1).
 func runSwitcher() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	p := prefs.Load(darwin.Prefs{})
 
 	if err := darwin.CreatePanel(); err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
 		return 1
 	}
 	// P3.4's finding: a pre-create ApplyTheme cannot be replayed, so it is called here, right after
-	// CreatePanel and before the first show. Idempotent, no IPC.
+	// CreatePanel and before the first show. Idempotent, no IPC. SetAppearance first so a forced
+	// Light/Dark from prefs takes effect on this first apply.
+	darwin.SetAppearance(string(p.Appearance))
 	if err := darwin.ApplyTheme(); err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: theme: %v\n", err)
 	}
@@ -281,8 +289,9 @@ func runSwitcher() int {
 	l := app.New(128)
 	l.OnError = func(err error) { fmt.Fprintf(os.Stderr, "gotab: %v\n", err) }
 
-	pf := darwin.NewPrefetcher(64)
-	r := &panelRenderer{opts: core.LayoutOpts{Scale: 2, MaxCols: 7}, pf: pf}
+	pf := darwin.NewPrefetcher(p.ThumbnailCacheSize)
+	r := &panelRenderer{opts: p.LayoutOpts(), pf: pf}
+	r.opts.Scale = 2 // Retina assumed until a task reads the actual display (assumption, V6.8)
 	l.OnState = r.onState
 
 	// Restyle on a Light/Dark flip. onChange runs on the main thread and ApplyTheme is non-blocking.
@@ -430,6 +439,34 @@ func demoDriver(ctx context.Context, l *app.Loop) {
 			l.Post(app.Event{Kind: app.Cycle, Dir: core.Forward})
 		}
 	}
+}
+
+// runPrefs is `gotab -prefs`: with no arguments it prints the effective settings (defaults overlaid
+// with whatever the CFPreferences domain holds); with Key=Value arguments it applies them, writes the
+// whole record back, and prints the result. The domain is the same one `defaults read/write app.gotab`
+// addresses, so either tool can drive it until the settings UI (P4.2) exists.
+func runPrefs(assignments []string) int {
+	store := darwin.Prefs{}
+	p := prefs.Load(store)
+
+	if len(assignments) == 0 {
+		fmt.Printf("gotab %s — effective preferences:\n%s", version, p)
+		fmt.Fprintln(os.Stderr, "\nset one:  gotab -prefs MaxColumns=5 Appearance=dark")
+		return 0
+	}
+
+	for _, a := range assignments {
+		if err := p.Set(a); err != nil {
+			fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+			return 1
+		}
+	}
+	if err := p.Save(store); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		return 1
+	}
+	fmt.Printf("saved. effective preferences:\n%s", p)
+	return 0
 }
 
 // state packs the flags into one column. "-" is not "false", it is "no source knew".

@@ -1194,3 +1194,43 @@ budget, and the first C→Go crossing on the tap thread (the runtime meeting a t
 seen), are unmeasured — a synthetic event's timestamp is not on the HID path, so P0.2's
 `spike/hotkey -manual -n 20` needs a human. The granted round trip — a real ⌥⇥ seen, swallowed,
 summon→cycle→raise — is V6.5.
+
+---
+
+## D34 · P4.1: settings live in the bundle-id CFPreferences domain, keyed by identity not a string — 2026-09-07
+
+`internal/prefs` is the pure-Go schema: a flat `Prefs` struct, `Default()`, `Load(Reader)`,
+`Save(Writer)`, `Set("Key=Value")` for the CLI, and the one-way derivations `LayoutOpts()` / `Rules()`.
+Keys are the exported field names, so a missing or wrong-typed key falls back to `Default()` — never
+Go's zero — and `gotab -prefs MaxColumns=5` and `defaults write app.gotab MaxColumns 5` address the
+same key. `internal/platform/darwin.Prefs` implements `Reader`/`Writer` over
+`CFPreferencesCopyAppValue` / `CFPreferencesSetAppValue` on `kCFPreferencesCurrentApplication`
+(`prefs.{h,m,go}`).
+
+- **The domain is the running binary's identity, not a literal `"app.gotab"`.** From
+  `build/GoTab.app` it is `CFBundleIdentifier` (`app.gotab`) and `defaults read app.gotab` shows the
+  schema — verified: `MaxColumns = 3`, `HotkeyModifiers = 524288`, `BlockedApps = ()` after
+  `gotab -prefs MaxColumns=3`. Under `go run` / a bare `go build` binary it is that binary's own name
+  (`~/Library/Preferences/<name>.plist`), so a dev build writes a throwaway domain and cannot corrupt
+  the real prefs. This is the same responsible-process identity rule TCC uses (ALTTAB-LESSONS §5), and
+  it is the honest behaviour, not a limitation to fix.
+- **`Save` writes the whole record, not a diff.** A field at its default is still persisted, so a
+  later change to `Default()` cannot silently move a user's setting.
+- **String arrays cross cgo `'\n'`-joined** (`BlockedApps`). A window-server application name never
+  contains a newline; the join is lossy only for a value that cannot occur.
+- **The `Appearance` override is an `atomic.Int32` in `theme.go`** that `ApplyTheme` consults; a
+  forced Light/Dark makes the `WatchAppearance` callback's re-apply a no-op. No `theme.m` change.
+
+**Two schema fields have no consumer yet, and this is deliberate — the schema is defined once:**
+
+- The **filter** fields (`ShowMinimized`, `ShowHidden`, `ShowOtherSpace`, `ActiveAppOnly`,
+  `BlockedApps`). `core.Filter` (P1.3) and `Prefs.Rules()` exist, but `internal/app`'s `doRescan`
+  orders **every** window — the loop has never filtered. Wiring it (a `Loop.Rules` field, and a
+  `core.Order` that rebuilds from a filtered row set) is its own change, and P4.4 touches the same
+  code for Spaces. `assumption` → these prefs are inert until then.
+- The **hotkey chord** (`HotkeyKeyCode` / `HotkeyModifiers`, defaulting to 48 / `0x80000` = ⌥Tab).
+  `hotkey.m`'s tap matches a fixed keycode; making `gt_hotkey_start` take a chord is small but
+  rebinding is a settings-UI feature, so it is P4.2's. `assumption` → not yet rebindable.
+
+`assumption` → **V6.8**: `panelRenderer` still hard-codes `Scale: 2` after `LayoutOpts()`. A task that
+reads the display's real backing scale (P4.4) removes it.

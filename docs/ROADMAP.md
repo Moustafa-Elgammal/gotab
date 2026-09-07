@@ -228,7 +228,13 @@ is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slice
 
 ## Phase 4 — Product
 
-- [ ] **P4.1** Preferences — plist under the new bundle ID
+- [x] **P4.1** Preferences — plist under the new bundle ID (D34). `internal/prefs` is the pure-Go
+      schema + defaults + `Load`/`Save`/`Set`; `darwin.Prefs` backs it with `CFPreferences` on the
+      `app.gotab` domain (interops with `defaults(1)`). `gotab -prefs [Key=Value…]` reads and writes
+      it; `-switch` reads the tile layout, the thumbnail cache bound, and the appearance from it.
+      **`assumption`s:** the filter fields (`ShowMinimized` etc.) and the hotkey chord are in the
+      schema but not yet consumed — the loop never filters, the tap's keycode is fixed. Wiring the
+      filter is P4.4's / its own; rebinding the hotkey is P4.2's.
 - [ ] **P4.2** Settings UI
 - [ ] **P4.3** Permissions onboarding — Accessibility + Screen Recording
 - [ ] **P4.4** Multi-monitor & Spaces
@@ -556,4 +562,19 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next: Phase 4 (Product) — P4.1, the preferences plist under the new bundle ID.** Or run the
   Phase 6 debts that are now cheap: V6.1 (hotkey latency) and V6.2 (panel over full-screen / across
   Spaces) both just need a human at the machine, and either coming back badly changes Phase 3 code.
+- `2026-09-07` — **P4.1 done — settings persist in the bundle-id plist (D34).** `internal/prefs` is
+  the pure-Go schema (`Prefs`, `Default()`, `Load`/`Save`/`Set`, `LayoutOpts()`/`Rules()`);
+  `internal/platform/darwin/prefs.{h,m,go}` back its `Reader`/`Writer` with `CFPreferencesCopyAppValue`
+  / `SetAppValue` on `kCFPreferencesCurrentApplication`. From `build/GoTab.app` that domain is
+  `app.gotab` and `defaults read app.gotab` shows the schema keys; under a bare `go build` it is the
+  binary's own name, so a dev build cannot scribble on the real prefs (the TCC identity rule again).
+  `gotab -prefs` prints the effective settings, `gotab -prefs MaxColumns=5 Appearance=dark` sets them.
+  `-switch` reads `MaxColumns`/`TileWidth`/`TileHeight`, `ThumbnailCacheSize`, and `Appearance` (a
+  forced Light/Dark via a new `darwin.SetAppearance` override in `theme.go`, no `theme.m` change).
+  **Two schema fields are inert until a later task:** the filter (`ShowMinimized` etc.) needs
+  `core.Rules` wired into `internal/app`'s loop, which never filters today — P4.4's or its own; the
+  hotkey chord needs `gt_hotkey_start` to take a keycode — P4.2's (rebinding is a settings-UI
+  feature). Round-trip and `defaults` interop verified; gate green, universal app builds.
+  **Next: P4.2 (Settings UI), or P4.3 (permissions onboarding — the one thing every path here has
+  needed a human for).** Or cash the V6.1/V6.2 Phase 0/3 debts.
 
