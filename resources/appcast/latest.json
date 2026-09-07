@@ -1,0 +1,6 @@
+{
+  "version": "0.2.0",
+  "url": "https://github.com/Moustafa-Elgammal/gotab/releases/tag/v0.2.0",
+  "notes": "Multi-monitor fixes and a faster first summon.",
+  "min_macos": "12.0"
+}
