@@ -1234,3 +1234,38 @@ same key. `internal/platform/darwin.Prefs` implements `Reader`/`Writer` over
 
 `assumption` → **V6.8**: `panelRenderer` still hard-codes `Scale: 2` after `LayoutOpts()`. A task that
 reads the display's real backing scale (P4.4) removes it.
+
+---
+
+## D35 · P4.2: one settings window, one assign form, and a rebindable chord — 2026-09-07
+
+`internal/platform/darwin/settings.{h,m,go}` build a fixed-size `NSWindow` with a control per wired
+setting — 4 filter checkboxes, a blocked-apps text field, an Appearance popup, Columns and
+Thumbnail-cache steppers, and a hotkey recorder — laid out with manual top-down frames (the window
+does not resize, so a stack view earns nothing). `gotab -settings` opens it on its own run loop.
+
+- **One assign form.** Every control funnels through `emit(key, value)` →
+  `goSettingsAssign("Key=Value")` → `prefs.Set` → `Save`. Reusing P4.1's `Set` parser means no
+  per-control marshalling and no second schema, and the CLI (`-prefs Key=Value`), `defaults(1)`, and
+  the window all drive the same path — so the `Key=Value` round trip is verified via `-prefs` even
+  though the window's pixels are not reachable from here.
+- **`darwin` still does not import `internal/prefs`.** `OpenSettings` takes a primitives-only
+  `SettingsValues`; `cmd/gotab` maps a `prefs.Prefs` onto it. `darwin.Prefs` has always implemented
+  `prefs.Reader`/`Writer` structurally, and this keeps that boundary.
+- **The hotkey chord is configurable end to end.** `gt_hotkey_start` now takes `(keycode,
+  modifiers)`; `g_chord_key` / `g_chord_mods` replace the hardcoded Tab + Alternate, and the
+  "modifiers released → commit" edge became `g_chord_was_held` transitioning, which works for any
+  modifier set. `modifiers == 0` is rejected in three places — `prefs.Set`, `StartHotkey`, and the
+  recorder (`NSBeep`) — because a bare-key chord would be swallowed for every application. If a chord
+  includes Shift, backward-cycle is unavailable (Shift cannot mean two things); an acceptable corner.
+- **`HotkeyDisplay` (`hotkey.go`) is the only chord formatter** — a small keycode table plus the four
+  modifier symbols. The recorder emits raw values and Go formats the label, so the string is produced
+  in one place; an uncommon keycode shows as its number.
+- **`-settings` is its own process** and the window says nothing misleading about it: it writes the
+  plist, and a running `gotab -switch` re-reads settings only on its next launch. The app switches to
+  `NSApplicationActivationPolicyRegular` while the window is open (it is `Accessory` for the panel);
+  `-settings` never creates the panel, so there is no conflict.
+
+**Still not wired:** the filter checkboxes **write** `ShowMinimized` etc., but `internal/app`'s loop
+still does not **read** `core.Rules` — P4.1's open item, and P4.4's to close (Spaces touch the same
+code). `TileWidth`/`TileHeight` stay CLI-only (`0 = auto` reads badly as a stepper).

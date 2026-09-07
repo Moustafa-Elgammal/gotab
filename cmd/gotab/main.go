@@ -43,6 +43,7 @@ func main() {
 	watch := flag.Bool("watch", false, "run the event loop and print the list as it changes; ^C to stop")
 	switchMode := flag.Bool("switch", false, "run the switcher: ⌥⇥ summons, ⌥ held cycles, release raises; ^C to stop")
 	prefsMode := flag.Bool("prefs", false, "print effective preferences; with Key=Value args, set them and exit")
+	settingsMode := flag.Bool("settings", false, "open the settings window")
 	flag.Parse()
 
 	if *showVersion {
@@ -70,11 +71,14 @@ func main() {
 	if *prefsMode {
 		os.Exit(runPrefs(flag.Args()))
 	}
+	if *settingsMode {
+		os.Exit(runSettings())
+	}
 	if *switchMode {
 		os.Exit(runSwitcher())
 	}
 
-	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch for the switcher, -watch for the text loop, -prefs or -check.\n", version)
+	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch for the switcher, -settings for the window, -watch, -prefs or -check.\n", version)
 	os.Exit(1)
 }
 
@@ -310,7 +314,7 @@ func runSwitcher() int {
 	// the tap thread already did (hotkey.h). Without the Accessibility grant the tap cannot install,
 	// and the scripted demo stands in so the render pipeline is still exercised.
 	hotkeyOK := false
-	if err := darwin.StartHotkey(func(g darwin.Gesture) { postGesture(l, g) }); err != nil {
+	if err := darwin.StartHotkey(p.HotkeyKeyCode, p.HotkeyModifiers, func(g darwin.Gesture) { postGesture(l, g) }); err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: hotkey unavailable (%v) — scripting a demo summon instead\n", err)
 		go demoDriver(ctx, l)
 	} else {
@@ -439,6 +443,60 @@ func demoDriver(ctx context.Context, l *app.Loop) {
 			l.Post(app.Event{Kind: app.Cycle, Dir: core.Forward})
 		}
 	}
+}
+
+// runSettings is `gotab -settings`: a native window over the same CFPreferences domain the CLI and
+// `defaults` use. Each control change is one "Key=Value" that prefs.Set parses and Save persists. It
+// is its own process — a running `gotab -switch` re-reads its settings only on the next launch.
+func runSettings() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	store := darwin.Prefs{}
+	p := prefs.Load(store)
+
+	onAssign := func(kv string) {
+		if err := p.Set(kv); err != nil {
+			fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+			return
+		}
+		if err := p.Save(store); err != nil {
+			fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+			return
+		}
+		// The recorder sends HotkeyKeyCode then HotkeyModifiers; refresh the label once, after both.
+		if strings.HasPrefix(kv, "HotkeyModifiers") {
+			darwin.SettingsSetHotkey(darwin.HotkeyDisplay(p.HotkeyKeyCode, p.HotkeyModifiers))
+		}
+	}
+
+	v := darwin.SettingsValues{
+		ShowMinimized:  p.ShowMinimized,
+		ShowHidden:     p.ShowHidden,
+		ShowOtherSpace: p.ShowOtherSpace,
+		ActiveAppOnly:  p.ActiveAppOnly,
+		BlockedApps:    strings.Join(p.BlockedApps, ", "),
+		Appearance:     string(p.Appearance),
+		MaxColumns:     p.MaxColumns,
+		ThumbnailCache: p.ThumbnailCacheSize,
+		HotkeyDisplay:  darwin.HotkeyDisplay(p.HotkeyKeyCode, p.HotkeyModifiers),
+	}
+
+	darwin.OnSettingsClosed(darwin.StopRunLoop)
+	if err := darwin.OpenSettings(v, onAssign); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		return 1
+	}
+
+	go func() {
+		<-ctx.Done()
+		darwin.OnMain(darwin.CloseSettings)
+		darwin.StopRunLoop()
+	}()
+
+	fmt.Println("settings open — close the window or ^C to finish.")
+	darwin.RunLoop()
+	return 0
 }
 
 // runPrefs is `gotab -prefs`: with no arguments it prints the effective settings (defaults overlaid

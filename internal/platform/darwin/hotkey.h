@@ -28,14 +28,20 @@ enum {
 };
 
 // Installs the tap on a dedicated thread and calls goHotkeyGesture(kind) for each step, on that
-// thread, which MUST return immediately (docs/ARCHITECTURE.md#the-cgo-rule). Option+Tab and its
-// key-up are swallowed so the focused application never sees the switcher's chord; a modifier change
-// is never swallowed, and every other key passes through untouched.
+// thread, which MUST return immediately (docs/ARCHITECTURE.md#the-cgo-rule).
+//
+// keycode is a hardware keycode (48 is Tab) and modifiers a CGEventFlags mask — whose bit values are
+// the same as NSEvent's device-independent modifier flags, so a key recorder can pass its NSEvent
+// mask straight through. The chord's keydown and matching keyup are swallowed so the focused
+// application never sees it; a modifier change is never swallowed, and every other key passes through.
+// Holding Shift beyond the chord's own modifiers cycles backwards. modifiers must be non-zero — a
+// bare key would be swallowed for the whole session.
 //
 // Requires the Accessibility grant. Without it CGEventTapCreate succeeds and then never fires — which
 // looks exactly like a broken hotkey — so this returns GT_ERR_NOT_TRUSTED instead, the same way
-// gt_ax_window_list does. Idempotent: a second call while running is GT_OK. Go serialises start/stop.
-gt_status gt_hotkey_start(void);
+// gt_ax_window_list does. Idempotent: a second call while running keeps the first chord (stop first
+// to change it). Go serialises start/stop.
+gt_status gt_hotkey_start(uint32_t keycode, uint64_t modifiers);
 
 // Removes the tap and its run-loop source and does not return until the tap thread has torn down, so
 // goHotkeyGesture cannot be called after it returns. Safe when not running, and safe twice.

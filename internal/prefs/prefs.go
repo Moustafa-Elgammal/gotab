@@ -214,8 +214,14 @@ func (p *Prefs) Set(assignment string) error {
 		case "ThumbnailCacheSize":
 			p.ThumbnailCacheSize = n
 		case "HotkeyKeyCode":
+			if n <= 0 {
+				return fmt.Errorf("HotkeyKeyCode: want a positive keycode, got %d", n)
+			}
 			p.HotkeyKeyCode = n
 		case "HotkeyModifiers":
+			if n == 0 {
+				return fmt.Errorf("HotkeyModifiers: need at least one modifier bit — a bare key would be swallowed everywhere")
+			}
 			p.HotkeyModifiers = n
 		}
 	case "Appearance":

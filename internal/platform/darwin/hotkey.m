@@ -17,8 +17,8 @@
 // Defined in Go (hotkey.go). Called only from the tap thread, and it must return immediately.
 extern void goHotkeyGesture(int kind);
 
-// Tab and Escape hardware keycodes. Layout-independent for these two on every Mac keyboard.
-enum { GT_KEY_TAB = 48, GT_KEY_ESC = 53 };
+// Escape's hardware keycode. Layout-independent, and not user-configurable — it always dismisses.
+enum { GT_KEY_ESC = 53 };
 
 static _Atomic(CFRunLoopRef) g_loop = NULL;
 static atomic_bool g_active = false;
@@ -29,10 +29,15 @@ static dispatch_semaphore_t g_done = NULL;
 static CFMachPortRef g_tap = NULL;
 static CFRunLoopSourceRef g_src = NULL;
 
-// Tap-thread-only, so unguarded. g_armed: at least one Tab has been seen since Option went down, so
-// releasing Option should commit the selection rather than be ignored.
+// The chord to match, set by gt_hotkey_start and then read only on the tap thread. Defaults are ⌥Tab.
+static uint32_t g_chord_key = 48;
+static uint64_t g_chord_mods = kCGEventFlagMaskAlternate;
+
+// Tap-thread-only, so unguarded. g_armed: the chord's key has been pressed at least once since its
+// modifiers went down, so releasing them should commit rather than be ignored. g_chord_was_held
+// tracks the modifiers so the release edge can be detected.
 static int g_armed = 0;
-static BOOL g_option_was_down = NO;
+static BOOL g_chord_was_held = NO;
 
 static CGEventRef on_event(CGEventTapProxy proxy, CGEventType type, CGEventRef event, void *ctx) {
     (void)proxy;
@@ -47,23 +52,24 @@ static CGEventRef on_event(CGEventTapProxy proxy, CGEventType type, CGEventRef e
     }
 
     CGEventFlags flags = CGEventGetFlags(event);
-    BOOL option = (flags & kCGEventFlagMaskAlternate) != 0;
-    BOOL shift = (flags & kCGEventFlagMaskShift) != 0;
+    BOOL held = (flags & g_chord_mods) == g_chord_mods;
+    // Shift means "backwards" only when it is not itself part of the chord.
+    BOOL shift = (flags & kCGEventFlagMaskShift) && !(g_chord_mods & kCGEventFlagMaskShift);
 
     if (type == kCGEventFlagsChanged) {
-        if (g_option_was_down && !option && g_armed) {
+        if (g_chord_was_held && !held && g_armed) {
             goHotkeyGesture(GT_HK_ACTIVATE);
             g_armed = 0;
         }
-        g_option_was_down = option;
-        return event; // never swallow a modifier change: other apps track Option state too
+        g_chord_was_held = held;
+        return event; // never swallow a modifier change: other apps track modifier state too
     }
 
     if (type == kCGEventKeyDown) {
         uint32_t code = (uint32_t)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
 
-        if (code == GT_KEY_TAB && option) {
-            // Autorepeat from a held Tab fires ~15x/s — too fast to cycle on, and a user who wants to
+        if (code == g_chord_key && held) {
+            // Autorepeat from a held key fires ~15x/s — too fast to cycle on, and a user who wants to
             // spin can tap. Act on the real presses only.
             if (CGEventGetIntegerValueField(event, kCGKeyboardEventAutorepeat)) return NULL;
             int kind;
@@ -84,9 +90,9 @@ static CGEventRef on_event(CGEventTapProxy proxy, CGEventType type, CGEventRef e
 
     if (type == kCGEventKeyUp) {
         uint32_t code = (uint32_t)CGEventGetIntegerValueField(event, kCGKeyboardEventKeycode);
-        // Swallow the key-up of a Tab whose key-down we swallowed, so the app underneath never gets
-        // an orphan key-up.
-        if (code == GT_KEY_TAB && g_armed) return NULL;
+        // Swallow the key-up of a chord key whose key-down we swallowed, so the app underneath never
+        // gets an orphan key-up.
+        if (code == g_chord_key && g_armed) return NULL;
         return event;
     }
 
@@ -134,13 +140,16 @@ static void hotkey_thread_main(void) {
     }
 }
 
-gt_status gt_hotkey_start(void) {
+gt_status gt_hotkey_start(uint32_t keycode, uint64_t modifiers) {
     if (!AXIsProcessTrusted()) return GT_ERR_NOT_TRUSTED;
-    if (atomic_exchange(&g_active, true)) return GT_OK; // already running
+    if (modifiers == 0) return GT_ERR_INTERNAL; // a bare key would be swallowed session-wide
+    if (atomic_exchange(&g_active, true)) return GT_OK; // already running; keep the current chord
 
+    g_chord_key = keycode;
+    g_chord_mods = modifiers;
     atomic_store(&g_stopping, false);
     g_armed = 0;
-    g_option_was_down = NO;
+    g_chord_was_held = NO;
     g_ready = dispatch_semaphore_create(0);
     g_done = dispatch_semaphore_create(0);
 

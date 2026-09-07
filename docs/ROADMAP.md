@@ -232,10 +232,15 @@ is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slice
       schema + defaults + `Load`/`Save`/`Set`; `darwin.Prefs` backs it with `CFPreferences` on the
       `app.gotab` domain (interops with `defaults(1)`). `gotab -prefs [Key=Value…]` reads and writes
       it; `-switch` reads the tile layout, the thumbnail cache bound, and the appearance from it.
-      **`assumption`s:** the filter fields (`ShowMinimized` etc.) and the hotkey chord are in the
-      schema but not yet consumed — the loop never filters, the tap's keycode is fixed. Wiring the
-      filter is P4.4's / its own; rebinding the hotkey is P4.2's.
-- [ ] **P4.2** Settings UI
+      **`assumption`:** the filter fields (`ShowMinimized` etc.) are in the schema but the event loop
+      never reads `core.Rules` — wiring that is P4.4's / its own. (The hotkey chord was P4.2's and is
+      done.)
+- [x] **P4.2** Settings UI (D35). `internal/platform/darwin/settings.{h,m,go}` build a native window
+      over the same CFPreferences domain — 4 filter checkboxes, a blocked-apps field, an Appearance
+      popup, Columns / Thumbnail-cache steppers, and a hotkey recorder. Every control change is one
+      `"Key=Value"` through `prefs.Set` → `Save`. `gt_hotkey_start` now takes a chord, so `HotkeyKeyCode`
+      / `HotkeyModifiers` are live end to end. `gotab -settings` opens it. The filter checkboxes
+      **write** but the loop still does not **read** them → P4.4.
 - [ ] **P4.3** Permissions onboarding — Accessibility + Screen Recording
 - [ ] **P4.4** Multi-monitor & Spaces
 - [ ] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh`. Note `scripts/build.sh` will need
@@ -577,4 +582,22 @@ Append one line per session. Newest last. This is how a cold session learns what
   feature). Round-trip and `defaults` interop verified; gate green, universal app builds.
   **Next: P4.2 (Settings UI), or P4.3 (permissions onboarding — the one thing every path here has
   needed a human for).** Or cash the V6.1/V6.2 Phase 0/3 debts.
+- `2026-09-07` — **P4.2 done — a native settings window, and the hotkey is rebindable (D35).**
+  `internal/platform/darwin/settings.{h,m,go}` build one fixed-size `NSWindow` — 4 filter checkboxes,
+  a blocked-apps text field, an Appearance popup, Columns / Thumbnail-cache steppers, a hotkey
+  recorder. Manual top-down frames, no Auto Layout. Every control funnels through one
+  `emit(key, value)` → `goSettingsAssign("Key=Value")` → `prefs.Set` → `Save`, so there is no
+  per-control marshalling and no second schema. `darwin` still does not import `internal/prefs`
+  (`SettingsValues` is primitives; `darwin.Prefs` implements the interfaces structurally).
+  `gt_hotkey_start` now takes `(keycode, modifiers)` — `g_chord_key`/`g_chord_mods` replace the
+  hardcoded ⌥Tab, the commit edge generalises to any modifier set — so `HotkeyKeyCode` /
+  `HotkeyModifiers` are live from `-prefs` and the recorder through to `-switch`'s `StartHotkey`.
+  `HotkeyDisplay` (`hotkey.go`) is the one chord formatter. `gotab -settings` opens the window on its
+  own run loop (Regular activation policy while open); it is its own process — a running `-switch`
+  re-reads prefs only on next launch. Smoke-tested: opens, exits 0 on close/^C; the `Key=Value` path
+  is verified through `-prefs`. The window's pixels and the recorder capturing a real chord are
+  V6.9 (a human).
+  **Next: P4.3 (permissions onboarding) — from a revoked state, explain which grant is missing and
+  recover without a relaunch loop.** Then P4.4 (multi-monitor & Spaces, which also wires the filter),
+  P4.5 (packaging). The V6.1/V6.2 human debts are still cheap and still worth doing first.
 
