@@ -6,6 +6,11 @@ cd "$(dirname "$0")/.."
 
 APP_NAME="GoTab"
 BUNDLE_ID="app.gotab"            # placeholder — change before any public release
+
+# Two versions, and the distinction is Apple's. SHORT_VERSION is the marketing string
+# (CFBundleShortVersionString) — hand-bumped, dotted numbers only. VERSION is the build identity
+# (CFBundleVersion, and -X main.version) — git describe, so a bug report names an exact commit.
+SHORT_VERSION="0.1.0"
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")"
 OUT="build/${APP_NAME}.app"
 
@@ -56,18 +61,26 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
     <key>CFBundleName</key>              <string>${APP_NAME}</string>
+    <key>CFBundleDisplayName</key>       <string>${APP_NAME}</string>
     <key>CFBundleExecutable</key>        <string>${APP_NAME}</string>
     <key>CFBundleIdentifier</key>        <string>${BUNDLE_ID}</string>
     <key>CFBundleVersion</key>           <string>${VERSION}</string>
-    <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+    <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>LSMinimumSystemVersion</key>    <string>${MIN_MACOS}</string>
+    <!-- Agent app: no Dock tile, no menu bar. The panel runs as Accessory and the settings window
+         promotes to Regular at runtime (P4.2). -->
     <key>LSUIElement</key>               <true/>
     <key>NSHighResolutionCapable</key>   <true/>
 </dict>
 </plist>
 PLIST
+
+# A malformed plist is a bundle that will not launch, and a stray metacharacter in VERSION would do
+# it silently. Cheap to catch here.
+plutil -lint "$OUT/Contents/Info.plist" >/dev/null
 
 # The plist claims MIN_MACOS; this proves the binary agrees, per slice. A mismatch is silent at build
 # time and fatal at launch on the user's machine, which is the worst place to find it -- and it is a
@@ -84,9 +97,14 @@ for arch in $(lipo -archs "$OUT/Contents/MacOS/${APP_NAME}"); do
   echo "      ${arch}: minos ${got}"
 done
 
-# Ad-hoc signature. Enough to run locally; a public release needs a Developer ID
-# and notarization, or Gatekeeper will refuse it on other people's machines.
+# Ad-hoc signature. Enough to run locally; a public release needs a Developer ID and notarization, or
+# Gatekeeper refuses it on other people's machines. No hardened runtime: ad-hoc + hardened without
+# notarization buys nothing locally and can trip library validation on the weak-linked framework.
 echo "    signing (ad-hoc)"
-codesign --force --deep --sign - "$OUT" 2>/dev/null
+codesign --force --sign - "$OUT"
+# Prove the signature took. --strict so a later nested-code addition that is not signed fails here
+# rather than at first launch on someone's machine.
+codesign --verify --strict "$OUT"
+echo "      signature ok ($(codesign -dv "$OUT" 2>&1 | awk -F= '/^Signature/{print $2}'))"
 
-echo "==> Built $OUT  (universal, macOS ${MIN_MACOS}+)"
+echo "==> Built $OUT  (universal, macOS ${MIN_MACOS}+, ${SHORT_VERSION} / ${VERSION})"

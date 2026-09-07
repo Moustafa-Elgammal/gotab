@@ -226,7 +226,7 @@ is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slice
 
 ---
 
-## Phase 4 — Product
+## Phase 4 — Product (complete; V6.7/V6.9 verify on a machine)
 
 - [x] **P4.1** Preferences — plist under the new bundle ID (D34). `internal/prefs` is the pure-Go
       schema + defaults + `Load`/`Save`/`Set`; `darwin.Prefs` backs it with `CFPreferences` on the
@@ -254,10 +254,14 @@ is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slice
       hard-coded `Scale: 2`. `Enumerate` fills `core.Window.Space`; `doRescan` refreshes
       `Rules.CurrentSpace`. **Still inert:** `ActiveAppOnly` (needs the frontmost pid on `Summon`) and
       the panel's own across-Spaces behaviour (P3.1's `collectionBehavior` → V6.2).
-- [ ] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh`. Note `scripts/build.sh` will need
-      `CGO_LDFLAGS_ALLOW` before it can link ScreenCaptureKit weakly → **V6.7**.
-      **`assumption`:** that a `minos 12.0` binary actually launches on macOS 12. P2.1 proved the binary
-      and its plist agree (D17); nothing here has a macOS 12 machine → **V6.7**
+- [x] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh` (D38). `build.sh` writes a full
+      Info.plist (`plutil -lint` clean, `LSUIElement`, split `CFBundleShortVersionString` /
+      `CFBundleVersion`), signs the *bundle* ad-hoc and verifies it. `install.sh` / `uninstall.sh`
+      honour `GOTAB_APPS`, verify the installed signature, and `--purge` also `tccutil reset`s the
+      grants — round-tripped against a temp dir. `cmd/gotab` with no flags runs the switcher from
+      inside `.app`, prints usage from a shell. The weak-SCK link landed earlier (`27cd840`).
+      **`assumption`:** a `minos 12.0` binary launching on macOS 12, and a first launch from
+      `/Applications` on a clean account (Gatekeeper on a quarantined copy) → **V6.7**.
 
 ---
 
@@ -289,7 +293,7 @@ coming back badly changes Phase 2/3 code rather than merely reporting on it.
 | **V6.4** | Thumbnail memory at realistic scale | 50-window cache at Retina resolution stays inside the stated bound; measured on `spike/procmem`'s **`IOSurface`** row, sampled at summon (D8: the resident figure decays within seconds) | — |
 | **V6.5** | `internal/platform` behaviour | the platform layer is a humble object and is **not** unit-tested (ARCHITECTURE.md). Verified instead by driving the built `.app`: enumerate → order → raise the window that was selected, on a machine with ≥ 20 windows across ≥ 2 apps | — |
 | **V6.6** | Phase 2/3 tests not written in place | tests for whatever Phase 2/3 grew that is pure enough to test — the C-shim boundary conversions above all — land in `internal/core`-style table tests; `scripts/check.sh` green | — |
-| **V6.7** | Ship the bundle | `./scripts/build.sh` produces a universal `build/GoTab.app` that launches from `/Applications` on a clean account, and `scripts/install.sh` / `uninstall.sh` round-trip. Includes the `CGO_LDFLAGS_ALLOW` fix for weak-linking ScreenCaptureKit | — |
+| **V6.7** | Ship the bundle (P4.5) | the bundle, its plist, the ad-hoc signature, the weak-SCK link, and the `install.sh`/`uninstall.sh` round-trip are all done and self-verified (D38). This is the machine half: `build/GoTab.app` launches from `/Applications` on a genuinely clean account (Gatekeeper allows a quarantined ad-hoc copy only after a right-click → Open, or notarization), and on a real macOS 12 host (`minos`/plist *agree*; a 12.0 binary *running* on 12.0 is untested — D17) | a machine |
 | **V6.8** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` still reports **0 allocs/op** for summon, cycle and dismiss after Phases 2–5 have wired real data through | — |
 | **V6.9** | Permissions onboarding (P4.3) | from a **revoked** state, `-switch` shows the alert, and granting in Settings brings the switcher up **without a relaunch** — the 750 ms poll picks it up. Both grants. The headless fallback and the poll are already exercised (D36); this is the modal + the human loop | a human |
 
@@ -639,4 +643,19 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next: P4.5 — package the `.app`: `install.sh` / `uninstall.sh` round-trip, ad-hoc codesign,
   verify the universal bundle. `build.sh` already does the weak-SCK link (this session).** Then Phase
   5, or hand the V6.1/V6.2/V6.5/V6.9 human checklist to someone at a Mac.
+- `2026-09-07` — **P4.5 done — GoTab.app packages, installs, and uninstalls cleanly (D38). Phase 4 is
+  complete.** `build.sh` writes a full Info.plist (`plutil -lint` clean, `LSUIElement`, split
+  `CFBundleShortVersionString`=`0.1.0` / `CFBundleVersion`=`git describe`, `CFBundleInfoDictionaryVersion`),
+  signs the bundle ad-hoc and `codesign --verify --strict`s it. `install.sh` / `uninstall.sh` honour a
+  `GOTAB_APPS` prefix, verify the installed copy's signature, and `--purge` also `tccutil reset`s both
+  grants — round-tripped against a temp dir, everything came back clean. `cmd/gotab` with no flags
+  runs the switcher when the executable is inside `.app` (a Finder launch) and prints usage from a
+  shell. `spctl` rejects the ad-hoc bundle, which is expected — Gatekeeper only enforces that on a
+  quarantined (downloaded) copy; a locally built one runs. **V6.7 is now purely the machine half:** a
+  first launch on a clean account, and a real macOS 12 host.
+  **Next: Phase 5 (localization scaffold, VoiceOver, update mechanism) — all optional polish — or
+  stop here.** The switcher is feature-complete: `gotab -switch` enumerates, filters, orders, draws,
+  prefetches, restyles, and raises, driven by a configurable ⌥⇥, with a settings window, onboarding,
+  and an installer. What is left is Phase 5 polish and the V6 checklist a human runs on a Mac
+  (V6.1–V6.5, V6.7, V6.9).
 

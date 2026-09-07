@@ -82,6 +82,11 @@ func main() {
 		os.Exit(runSwitcher())
 	}
 
+	// Double-clicked from Finder there are no flags, and the switcher is what the user wants — a
+	// usage message they cannot see would just be an app that does nothing. From a shell, print help.
+	if runningInBundle() {
+		os.Exit(runSwitcher())
+	}
 	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch, -settings, -permissions, -watch, -prefs or -check.\n", version)
 	os.Exit(1)
 }
@@ -118,6 +123,14 @@ func reportPermissions() int {
 func stderrIsTTY() bool {
 	fi, err := os.Stderr.Stat()
 	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// runningInBundle reports whether this executable is the one inside GoTab.app, as opposed to a bare
+// `go build` binary or `go run`. It decides the no-flags default: the switcher for a Finder launch, a
+// usage message for a shell.
+func runningInBundle() bool {
+	exe, err := os.Executable()
+	return err == nil && strings.Contains(exe, ".app/Contents/MacOS/")
 }
 
 const (
