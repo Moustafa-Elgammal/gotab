@@ -1,14 +1,20 @@
-// SKELETON for P3.1. The panel and its views are created for real here -- that part is settled prior
-// art from spike/panel (P0.1/D13) and freezing panel.h depends on it existing. Everything that draws
-// a tile, positions the window on the mouse's screen, distinguishes show from update, or wires the
-// palette/material is a stub marked `// P3.1:` for the owning agent to replace.
+// The switcher panel and its single-view renderer.
 //
-// Compiled WITHOUT ARC, like every other .m in this package: retain/release is manual.
+// One borderless non-activating NSPanel, one flipped GTTileView that draws EVERY tile in one
+// drawRect: -- background slab, per-tile background, the selection treatment, title + subtitle, and a
+// placeholder for any tile whose thumbnail does not exist yet (D12: tiles are on screen before the
+// captures finish). Thumbnails ride in dumb CALayer sublayers that never call back into Go; P3.3 sets
+// their `contents` through gt_panel_tile_layer and nothing here touches that.
 //
-// P3.1's contract is docs/tasks/P3.1.md. Do not touch panel.h (frozen), and do not edit thumbnail.*
-// or theme.* -- those are P3.3 and P3.4.
+// Prior art is spike/panel/panel.m (P0.1/D13): the style mask, the collectionBehavior triple and the
+// flipped one-view draw are copied from it. Compiled WITHOUT ARC like every other .m here, so
+// retain/release is manual.
+//
+// Contract: docs/tasks/P3.1.md. panel.h is frozen; thumbnail.* is P3.3 and theme.* is P3.4.
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
+#include <stdlib.h>
+#include <string.h>
 #include "panel.h"
 
 // ---------------------------------------------------------------------------
@@ -25,6 +31,72 @@ static int g_have_palette = 0;
 // GT_MATERIAL_NONE until P3.4 sets one. Stored so a palette-only redraw keeps it.
 static int32_t g_material = GT_MATERIAL_NONE;
 
+// A by-value copy of the tiles from the last gt_panel_show / gt_panel_update. The pointer Go hands in
+// is alive only for the duration of that call, but drawRect: runs on a later run-loop turn, so it
+// reads from here. `image` handles are borrowed exactly as gt_tile documents: copied, drawn, never
+// released.
+static gt_tile *g_tiles = NULL;
+static int32_t g_ntiles = 0;
+
+// How a tile's frame is split between its thumbnail and its text. P3.2 (layout) computes the outer
+// frame; the inside is P3.1's until that lands. The tile CALayer is positioned over the thumbnail
+// sub-rect ONLY -- not the whole tile -- so an opaque CGImage dropped on it by P3.3 does not cover
+// the title strip. gt_panel_tile_layer's callers should assume that geometry.
+static const CGFloat kSlabRadius = 12.0;  // matches g_effect.layer.cornerRadius set in gt_panel_create
+static const CGFloat kTilePad = 8.0;      // tile edge -> its contents
+static const CGFloat kTileRadius = 8.0;
+static const CGFloat kLabelStrip = 34.0;  // bottom band of a tile reserved for title + subtitle
+static const CGFloat kLabelGap = 4.0;     // thumbnail -> label strip
+
+// ---------------------------------------------------------------------------
+// Palette. One built-in dark default so the panel is styled before P3.4's first gt_panel_set_palette.
+// ---------------------------------------------------------------------------
+
+static gt_palette default_dark_palette(void) {
+    gt_palette p;
+    p.panel_bg    = (gt_rgba){0.12, 0.12, 0.13, 0.96};
+    p.tile_bg     = (gt_rgba){1.00, 1.00, 1.00, 0.06};
+    p.tile_sel_bg = (gt_rgba){0.26, 0.46, 0.86, 0.92};
+    p.label       = (gt_rgba){0.97, 0.97, 0.98, 1.00};
+    p.label_dim   = (gt_rgba){0.72, 0.72, 0.76, 1.00};
+    p.is_dark     = 1;
+    return p;
+}
+
+static gt_palette current_palette(void) {
+    return g_have_palette ? g_palette : default_dark_palette();
+}
+
+static NSColor *nscolor(gt_rgba c) {
+    return [NSColor colorWithSRGBRed:c.r green:c.g blue:c.b alpha:c.a];
+}
+
+// c mixed toward white by t (0..1), keeping a solid alpha. Used for the selection outline and the
+// placeholder ink so they read against tile_sel_bg / tile_bg without a second palette entry.
+static NSColor *lighten(gt_rgba c, double t) {
+    return [NSColor colorWithSRGBRed:c.r + (1.0 - c.r) * t
+                               green:c.g + (1.0 - c.g) * t
+                                blue:c.b + (1.0 - c.b) * t
+                               alpha:1.0];
+}
+
+static NSString *tile_string(const char *bytes, uint16_t len) {
+    if (len == 0) return @"";
+    NSString *s = [[NSString alloc] initWithBytes:bytes length:len encoding:NSUTF8StringEncoding];
+    return s ? [s autorelease] : @"";
+}
+
+// The thumbnail sub-rect of a tile frame, in the flipped content view's coordinates. Shared by the
+// renderer and the CALayer placement so the two never disagree.
+static NSRect tile_image_rect(NSRect tile) {
+    NSRect inner = NSInsetRect(tile, kTilePad, kTilePad);
+    if (inner.size.width <= 0 || inner.size.height <= 0) return NSZeroRect;
+    if (inner.size.height > kLabelStrip + 12.0) {
+        inner.size.height -= kLabelStrip + kLabelGap;
+    }
+    return inner;
+}
+
 // ---------------------------------------------------------------------------
 // The one view that draws every tile. AltTab has 53 NSView subclasses and pays a C->Go callback per
 // tile; this draws them all in drawRect: and keeps thumbnails in dumb CALayers that never call back.
@@ -34,16 +106,147 @@ static int32_t g_material = GT_MATERIAL_NONE;
 @end
 
 @implementation GTTileView
+
 - (BOOL)isFlipped {
     return YES;
 }
+
+- (void)drawPlaceholderInRect:(NSRect)r palette:(gt_palette)pal {
+    if (r.size.width < 16 || r.size.height < 16) return;
+
+    NSBezierPath *bg = [NSBezierPath bezierPathWithRoundedRect:r xRadius:6 yRadius:6];
+    NSColor *fill = pal.is_dark ? [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.05]
+                                : [NSColor colorWithSRGBRed:0 green:0 blue:0 alpha:0.05];
+    [fill setFill];
+    [bg fill];
+
+    NSColor *ink = [nscolor(pal.label_dim) colorWithAlphaComponent:0.55];
+    [ink setStroke];
+    [bg setLineWidth:1.0];
+    [bg stroke];
+
+    // A minimal "image not here yet" glyph: a sun disc and a mountain ridge inside the frame. Cheap
+    // to stroke every keystroke and unmistakably a placeholder rather than a failed draw.
+    NSRect g = NSInsetRect(r, r.size.width * 0.26, r.size.height * 0.30);
+    if (g.size.width < 8 || g.size.height < 8) return;
+    [ink setFill];
+
+    CGFloat disc = fmin(g.size.width, g.size.height) * 0.28;
+    NSRect sun = NSMakeRect(NSMinX(g), NSMinY(g), disc, disc);
+    [[NSBezierPath bezierPathWithOvalInRect:sun] fill];
+
+    NSBezierPath *ridge = [NSBezierPath bezierPath];
+    [ridge moveToPoint:NSMakePoint(NSMinX(g), NSMaxY(g))];
+    [ridge lineToPoint:NSMakePoint(NSMinX(g) + g.size.width * 0.40, NSMinY(g) + g.size.height * 0.45)];
+    [ridge lineToPoint:NSMakePoint(NSMinX(g) + g.size.width * 0.62, NSMinY(g) + g.size.height * 0.70)];
+    [ridge lineToPoint:NSMakePoint(NSMinX(g) + g.size.width * 0.82, NSMinY(g) + g.size.height * 0.38)];
+    [ridge lineToPoint:NSMakePoint(NSMaxX(g), NSMaxY(g))];
+    [ridge closePath];
+    [ridge fill];
+}
+
+- (void)drawImage:(CGImageRef)img inRect:(NSRect)r {
+    if (!img || r.size.width < 2 || r.size.height < 2) return;
+    size_t iw = CGImageGetWidth(img), ih = CGImageGetHeight(img);
+    if (iw == 0 || ih == 0) return;
+
+    CGFloat scale = fmin(r.size.width / (CGFloat)iw, r.size.height / (CGFloat)ih);
+    CGFloat dw = (CGFloat)iw * scale, dh = (CGFloat)ih * scale;
+    NSRect dst = NSMakeRect(NSMidX(r) - dw / 2.0, NSMidY(r) - dh / 2.0, dw, dh);
+
+    // respectFlipped:YES draws upright in this flipped view without a manual CTM flip.
+    NSImage *im = [[NSImage alloc] initWithCGImage:img size:NSZeroSize];
+    [im drawInRect:dst
+          fromRect:NSZeroRect
+         operation:NSCompositingOperationSourceOver
+          fraction:1.0
+    respectFlipped:YES
+             hints:nil];
+    [im release];
+}
+
 - (void)drawRect:(NSRect)dirty {
     (void)dirty;
-    // P3.1: draw the rounded panel slab (g_palette.panel_bg when g_material == GT_MATERIAL_NONE,
-    // otherwise let the NSVisualEffectView show through), then each tile's background, selection
-    // treatment, title and subtitle. Placeholder art when a tile's layer has no contents yet (D12:
-    // tiles are shown before their thumbnails exist). The tile frames arrive via gt_panel_show /
-    // gt_panel_update; store them alongside g_tile_layers.
+    @autoreleasepool {
+        gt_palette pal = current_palette();
+        NSRect b = [self bounds];
+
+        // The rounded slab. With a vibrancy material the NSVisualEffectView behind us is the
+        // background and we leave it showing; with GT_MATERIAL_NONE we paint palette.panel_bg.
+        if (g_material == GT_MATERIAL_NONE) {
+            NSBezierPath *slab = [NSBezierPath bezierPathWithRoundedRect:b
+                                                                xRadius:kSlabRadius
+                                                                yRadius:kSlabRadius];
+            [nscolor(pal.panel_bg) setFill];
+            [slab fill];
+        }
+
+        if (g_ntiles == 0 || !g_tiles) return;
+
+        NSMutableParagraphStyle *para = [[[NSMutableParagraphStyle alloc] init] autorelease];
+        para.lineBreakMode = NSLineBreakByTruncatingTail;
+        NSDictionary *titleAttrs = @{
+            NSFontAttributeName : [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold],
+            NSForegroundColorAttributeName : nscolor(pal.label),
+            NSParagraphStyleAttributeName : para,
+        };
+        NSDictionary *subAttrs = @{
+            NSFontAttributeName : [NSFont systemFontOfSize:11 weight:NSFontWeightRegular],
+            NSForegroundColorAttributeName : nscolor(pal.label_dim),
+            NSParagraphStyleAttributeName : para,
+        };
+
+        for (int32_t i = 0; i < g_ntiles; i++) {
+            gt_tile *t = &g_tiles[i];
+            NSRect r = NSMakeRect(t->x, t->y, t->w, t->h);
+            if (r.size.width < 2 || r.size.height < 2) continue;
+
+            NSBezierPath *tilePath = [NSBezierPath bezierPathWithRoundedRect:r
+                                                                    xRadius:kTileRadius
+                                                                    yRadius:kTileRadius];
+            [(t->selected ? nscolor(pal.tile_sel_bg) : nscolor(pal.tile_bg)) setFill];
+            [tilePath fill];
+
+            NSRect inner = NSInsetRect(r, kTilePad, kTilePad);
+            NSRect imageRect = tile_image_rect(r);
+
+            // Thumbnail if this frame carries one (a warm cache hit at summon); otherwise the
+            // placeholder so the tile is never a hole (D12). Independent of that, P3.3 may drop a
+            // CGImage on gt_panel_tile_layer(i), which composites on top of everything here.
+            if (imageRect.size.height > 8.0) {
+                if (t->image) {
+                    [self drawImage:(CGImageRef)t->image inRect:imageRect];
+                } else {
+                    [self drawPlaceholderInRect:imageRect palette:pal];
+                }
+            }
+
+            // Title + subtitle in the bottom strip.
+            if (inner.size.width > 4.0) {
+                CGFloat ly = (imageRect.size.height > 8.0) ? NSMaxY(imageRect) + kLabelGap
+                                                           : inner.origin.y;
+                NSRect titleLine = NSMakeRect(inner.origin.x, ly, inner.size.width, 17);
+                NSRect subLine = NSMakeRect(inner.origin.x, ly + 17, inner.size.width, 15);
+                if (NSMaxY(subLine) <= NSMaxY(inner) + 2.0) {
+                    [tile_string(t->title, t->title_len) drawInRect:titleLine withAttributes:titleAttrs];
+                    [tile_string(t->subtitle, t->subtitle_len) drawInRect:subLine withAttributes:subAttrs];
+                } else {
+                    [tile_string(t->title, t->title_len) drawInRect:titleLine withAttributes:titleAttrs];
+                }
+            }
+
+            // Selection outline, drawn last and inset 1pt so it stays visible even when P3.3's
+            // thumbnail layer (inset kTilePad) is opaque.
+            if (t->selected) {
+                NSBezierPath *ring = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(r, 1.0, 1.0)
+                                                                    xRadius:kTileRadius
+                                                                    yRadius:kTileRadius];
+                [ring setLineWidth:2.0];
+                [lighten(pal.tile_sel_bg, 0.45) setStroke];
+                [ring stroke];
+            }
+        }
+    }
 }
 @end
 
@@ -87,7 +290,7 @@ gt_status gt_panel_create(void) {
     [g_effect setState:NSVisualEffectStateActive];
     [g_effect setBlendingMode:NSVisualEffectBlendingModeBehindWindow];
     [g_effect setWantsLayer:YES];
-    [[g_effect layer] setCornerRadius:12];
+    [[g_effect layer] setCornerRadius:kSlabRadius];
     [[g_effect layer] setMasksToBounds:YES];
     [g_panel setContentView:g_effect];
 
@@ -100,50 +303,96 @@ gt_status gt_panel_create(void) {
     return GT_OK;
 }
 
-// P3.1: fold the shared body of show/update out of here; keep the screen-resolve and orderFront in
-// show only.
+// Deep-copies the incoming tiles into g_tiles (see the note on that global). tiles may be NULL when
+// n == 0; anything else with a NULL pointer is treated as n == 0.
+static void store_tiles(const gt_tile *tiles, int32_t n) {
+    if (n < 0 || !tiles) n = 0;
+    if (n == 0) {
+        free(g_tiles);
+        g_tiles = NULL;
+        g_ntiles = 0;
+        return;
+    }
+    gt_tile *buf = realloc(g_tiles, (size_t)n * sizeof(gt_tile));
+    if (!buf) return; // keep the previous frame rather than crash; next summon retries
+    g_tiles = buf;
+    memcpy(g_tiles, tiles, (size_t)n * sizeof(gt_tile));
+    g_ntiles = n;
+}
+
+// The shared body of show and update: copy the tiles, resize the CALayer array to match, place each
+// layer over its tile's thumbnail sub-rect, and mark the view for redraw. Deliberately does NOT
+// resolve a screen or order the window -- gt_panel_show owns both of those.
 static gt_status panel_populate(const gt_tile *tiles, int32_t n) {
     if (!g_panel) return GT_ERR_INTERNAL;
+    if (!tiles || n < 0) n = 0;
 
-    // P3.1: rebuild g_tile_layers to length n, position each at tiles[i].{x,y,w,h}, store the frames
-    // for drawRect:, and mark the view for display. For now just size the layer array so
-    // gt_panel_tile_layer does not read past it.
-    while ((int32_t)g_tile_layers.count > n && g_tile_layers.count > 0) {
+    store_tiles(tiles, n);
+
+    // No implicit animation: on the keystroke path every tile's frame can move and the default
+    // 0.25 s CALayer action would smear the whole strip (D13 separates this path from the summon).
+    [CATransaction begin];
+    [CATransaction setDisableActions:YES];
+
+    while ((int32_t)g_tile_layers.count > n) {
         [[g_tile_layers lastObject] removeFromSuperlayer];
         [g_tile_layers removeLastObject];
     }
     while ((int32_t)g_tile_layers.count < n) {
         CALayer *l = [CALayer layer];
         l.contentsGravity = kCAGravityResizeAspect;
+        l.masksToBounds = YES;
+        l.cornerRadius = 6.0;
         [[g_content layer] addSublayer:l];
         [g_tile_layers addObject:l];
     }
     for (int32_t i = 0; i < n; i++) {
         CALayer *l = g_tile_layers[i];
-        l.frame = CGRectMake(tiles[i].x, tiles[i].y, tiles[i].w, tiles[i].h);
+        NSRect img = tile_image_rect(NSMakeRect(tiles[i].x, tiles[i].y, tiles[i].w, tiles[i].h));
+        l.frame = NSRectToCGRect(img);
     }
+
+    [CATransaction commit];
+
     [g_content setNeedsDisplay:YES];
     return GT_OK;
 }
 
 gt_status gt_panel_show(const gt_tile *tiles, int32_t n, int32_t panel_w, int32_t panel_h) {
     if (!g_panel) return GT_ERR_INTERNAL;
+    if (panel_w <= 0 || panel_h <= 0) return GT_ERR_INTERNAL;
 
-    // P3.1: resolve the screen under the mouse and centre there. Skeleton uses the main screen.
-    NSScreen *screen = [NSScreen mainScreen];
+    // The screen under the mouse is where the user is looking -- not mainScreen, which is wherever
+    // the key window / menu bar is. mouseLocation and NSScreen.frame are both global, bottom-left.
+    NSPoint mouse = [NSEvent mouseLocation];
+    NSScreen *screen = nil;
+    for (NSScreen *s in [NSScreen screens]) {
+        if (NSPointInRect(mouse, [s frame])) {
+            screen = s;
+            break;
+        }
+    }
+    if (!screen) screen = [NSScreen mainScreen];
+    if (!screen) return GT_ERR_UNAVAILABLE;
+
     NSRect vf = [screen visibleFrame];
-    NSRect frame = NSMakeRect(NSMidX(vf) - panel_w / 2.0, NSMidY(vf) - panel_h / 2.0, panel_w, panel_h);
+    NSRect frame = NSMakeRect(NSMidX(vf) - panel_w / 2.0,
+                              NSMidY(vf) - panel_h / 2.0,
+                              panel_w, panel_h);
     [g_panel setFrame:frame display:NO];
 
     gt_status st = panel_populate(tiles, n);
     if (st != GT_OK) return st;
 
+    // orderFrontRegardless, not orderFront: an Accessory app may not bring a window forward through
+    // the ordinary path. The non-activating style mask keeps the app behind us frontmost -- P0.1
+    // checked the frontmost pid was unchanged across a summon 20x (D13).
     [g_panel orderFrontRegardless];
     return GT_OK;
 }
 
 gt_status gt_panel_update(const gt_tile *tiles, int32_t n) {
-    if (![g_panel isVisible]) return GT_OK;
+    if (!g_panel || ![g_panel isVisible]) return GT_OK;
     return panel_populate(tiles, n);
 }
 
@@ -182,9 +431,15 @@ void gt_panel_set_palette(gt_palette p) {
 
 void gt_panel_set_material(int32_t material) {
     g_material = material;
-    // P3.1: when material == GT_MATERIAL_NONE, hide g_effect's vibrancy and paint palette.panel_bg;
-    // otherwise [g_effect setMaterial:material].
-    if (material != GT_MATERIAL_NONE && g_effect) {
-        [g_effect setMaterial:(NSVisualEffectMaterial)material];
+    if (g_effect) {
+        if (material == GT_MATERIAL_NONE) {
+            // Vibrancy off: drop the effect view to inactive (there is no true "no material") and let
+            // GTTileView paint palette.panel_bg over it. P3.4 owns finer control from theme.m.
+            [g_effect setState:NSVisualEffectStateInactive];
+        } else {
+            [g_effect setState:NSVisualEffectStateActive];
+            [g_effect setMaterial:(NSVisualEffectMaterial)material];
+        }
     }
+    [g_content setNeedsDisplay:YES];
 }
