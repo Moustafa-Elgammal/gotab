@@ -998,3 +998,161 @@ a slow ticker demoted to a backstop.
 **assumption → V6.9:** behaviour under an Accessibility grant revoked mid-run. `gt_observers_start`
 checks `AXIsProcessTrusted()` up front but nothing re-checks, and what macOS does to a live
 `AXObserverRef` on revocation is untested — it needs a human toggling System Settings during a run.
+
+---
+
+## D28 · P3.2: the tile layout engine, and what it deliberately does not decide — 2026-09-07
+
+`core.Layout(n, opts, dst)` (`internal/core/layout.go`) computes the panel size and one frame per tile
+from a window count and the display, in pure integer arithmetic — deterministic, and 0 allocs/op when
+handed a presized `dst`. Four steps: margin `= clamp(Screen.W / 20, 32, 220)` (a fixed border is
+wrong on either a 1280- or a 6016-wide display); columns `=` how many `MinTileW` tiles fit the usable
+width, capped by `MaxCols` and `n`; tile width `=` usable width ÷ columns, clamped to
+`[MinTileW, MaxTileW]`; then rebalance so `cols = ceil(n / rows)` and no trailing row is near-empty
+(12 windows on a 1280 display → 6+6, not 10+2).
+
+Contract extended by **adding** fields only (`api.go` was frozen and stayed so): `LayoutOpts +=
+MinTileW/H, MaxTileW/H`; `Result += Cols, Rows, Overflow`. `Overflow` is a flag, never a dropped tile,
+set when the wrapped panel is taller than `Screen.H` — clip or scroll is the renderer's call.
+
+**What it does not do**, recorded so a later task does not look for it in the wrong place:
+
+- **Selected-tile emphasis.** Not implemented (the contract marked it optional). When added it is a
+  `SelectedRow int` on `LayoutOpts` with `< 0` meaning "none" — 0 is a valid tile index, so unlike
+  `Rules.ActiveApp == 0` the sentinel must be negative.
+- **Height does not track width.** On a narrow display `tileW` can fall well below the preferred
+  `TileW` while `tileH` holds, so the tile aspect departs from `TileW:TileH`. Aspect-fitting the
+  thumbnail inside that frame is the renderer's — P3.1 does exactly that (D29).
+
+Verification cases handed to V6.6 / V6.8 (full list in `docs/tasks/P3.2.md`): the 0-alloc bench,
+index alignment / row-major placement, the min/max wrap boundary, the three margin values, rebalance,
+and the `MinTileW > MaxTileW` / sub-`MinTileW`-display coercions.
+
+---
+
+## D29 · P3.1: one flipped view draws every tile; thumbnails ride in CALayers — 2026-09-07
+
+`panel.m` implements the frozen `panel.h`: a borderless non-activating `NSPanel` over an
+`NSVisualEffectView` over one flipped `GTTileView` whose `drawRect:` paints the whole strip in a
+single pass — rounded slab, per-tile background, a 2 pt selection outline, title (13 pt semibold) +
+subtitle (11 pt) tail-truncated, and a framed sun/mountain **placeholder** for any tile whose image
+is not captured yet (D12: that is a launch state, not a refinement). Style mask and the
+`collectionBehavior` triple are `spike/panel`'s, verified there (D13).
+
+- **Thumbnails are dumb `CALayer` sublayers**, one per tile, that never call back into Go — AltTab
+  has 53 NSView subclasses and a C→Go hop per tile; this has zero. `gt_panel_tile_layer(i)` hands
+  P3.3 a layer positioned over the tile's **thumbnail sub-rect** (inset 8 pt, minus a 34 pt label
+  band), so an opaque `CGImage` on `contents` cannot cover the title. The split constants
+  (`kTilePad`, `kLabelStrip`) live in `panel.m` and are the P3.1↔P3.2/P3.3 coordination point.
+- **Show vs update is a real split** (D13: a re-order costs ~1 ms but a cold frame commits at
+  ~14 ms). `gt_panel_show` resolves the screen under the mouse and orders front; `gt_panel_update`
+  only re-populates and redraws. Both wrap the layer add/remove/reframe in a `CATransaction` with
+  `setDisableActions:YES` — without it every keystroke animates the strip sliding for 0.25 s.
+- **`gt_image_ref` is cast straight back to `CGImageRef`** to draw a warm-cache tile, relying on
+  `gt_image_adopt` being a bare cast. No accessor exists in `shim.h`; the `gt_tile` comment ("the
+  panel draws it") is the sanction. If `struct gt_image` ever gains a field this breaks → flag V6.
+- **New link dependency `-framework QuartzCore`** in `panel.go`. The skeleton used `CALayer` already
+  but was never link-tested — the gate ran `go vet` + `go test`, neither of which links a binary.
+  Fixed there too (D32).
+
+Verified by an **in-process offscreen render** (`-[NSView cacheDisplayInRect:toBitmapImageRep:]`, no
+Screen Recording grant needed): styled slab, tiles, selection moving under `gt_panel_update` with no
+re-show, truncated CJK/emoji titles, per-tile placeholders, a live `CGImage` on a tile layer with no
+re-show, frontmost pid unchanged across create→show→update→hide. The real window-server pass —
+vibrancy, window level, `collectionBehavior` over a full-screen app / across Spaces — is **V6.2/V6.3**
+and needs a human.
+
+---
+
+## D30 · P3.3: thumbnails prefetch on one goroutine, and the prefetcher owns every handle — 2026-09-07
+
+`thumbnail.{h,m,go}` add a `Prefetcher`: `NewPrefetcher(capacity)`, `Want([]ThumbRequest)`, `Stop()`.
+`Want` (called after each show/update) publishes the visible tile set to **one** capture goroutine —
+not a pool, because SCScreenshotManager serialises in the WindowServer (D12/D26) — which drives
+`core.Cache` + `darwin.Capture` and sets each tile layer's `contents` through `darwin.OnMain`.
+
+- **The memory rule, concretely:** every `ImageRef` a capture produces is held in the Prefetcher and
+  `Release()`d exactly once, on `core.Cache` eviction or `Stop`. The panel never releases a tile
+  image (`panel.h`). Releases are posted to the FIFO main queue, so one cannot overtake a still-queued
+  `gt_thumbnail_set` for the same handle — and CoreAnimation's own retain on `layer.contents` covers
+  the gap, so a tile mid-eviction does not go black. `gt_thumbnail_set` never touches `gt_image_live`.
+- **A window that fails capture 3× in a row is dropped for the Prefetcher's life** (D26: 2–10% of
+  captures fail because the window is gone or SCK declines, and retrying twice recovered none; a
+  stale cache entry never self-heals).
+- **`Stop` blocks until an in-flight `Capture` returns** — `Capture` has no cancellation and D12 saw
+  it hang ~1/10 runs, so `Stop` can take up to `captureTimeout` (~2 s) then, ~57 ms normally.
+  `runSwitcher` runs `Stop` in the shutdown goroutine, off any dismiss path.
+
+Not verifiable from an agent (no Screen Recording grant on the responsible process): a thumbnail
+actually reaching a tile, and `LiveImages()` settling at the cache bound after real evictions / back
+to 0 after `Stop` with images held. The accounting is argued in the code; **V6.4** measures it.
+`LiveImages()` was observed at 0 throughout a no-grant run — never negative.
+
+---
+
+## D31 · P3.4: the palette comes from the effective appearance, and needs one integrator call — 2026-09-07
+
+`theme.{h,m,go}` read the effective appearance — the panel's
+`NSVisualEffectView.effectiveAppearance` once it exists (that carries a per-window override), else
+`NSApp`'s, resolved with `-bestMatchFromAppearancesWithNames:@[Aqua, DarkAqua]` so the accessibility
+high-contrast appearances fold onto the right side — and push a `gt_palette` +
+`NSVisualEffectMaterialHUDWindow` through P3.1's frozen setters. `AppleInterfaceStyle` from user
+defaults is deliberately not used: it misses the per-app override and the auto Light/Dark schedule.
+
+- **The watcher is KVO on `NSApp.effectiveAppearance`**, not the
+  `AppleInterfaceThemeChangedNotification` distributed notification (the defaults mechanism, which
+  fires only for the system-wide setting). The callback does nothing but call `goThemeChanged()` —
+  the shape of P2.3b's observers. Fired exactly on real flips, never on a no-op, never after
+  `StopWatchingAppearance`; add/remove and alloc/release are paired under a latch.
+- **`ApplyTheme` before `gt_panel_create` cannot be replayed from `theme.*`** — there is no create
+  hook and `panel.*` is frozen; the skeleton `gt_panel_set_material` early-returns while
+  `g_effect == nil`. So the **integrator calls `ApplyTheme()` immediately after `CreatePanel()`**,
+  which `runSwitcher` does. It is idempotent and does no IPC.
+- **Vibrancy is kept on** (HUD material); the palette's `tile_bg` values are light washes that assume
+  the blur behind them, and `panel_bg` is only the `GT_MATERIAL_NONE` fallback.
+
+Light/Dark screenshots are **INCONCLUSIVE from an agent** (no window-server session) and belong to
+P3.1's V6.2/V6.3 pass. The KVO path was driven by toggling `NSApp.appearance`, the same
+`effectiveAppearance` signal the System Settings switch travels; the literal toggle needs a human (V6.2).
+
+---
+
+## D32 · Phase 3 integrated — `gotab -switch` runs the whole pipeline — 2026-09-07
+
+The four Phase 3 tasks exposed APIs and nothing called them. `cmd/gotab -switch` is the wiring:
+`CreatePanel` → `ApplyTheme` → `WatchAppearance` → `StartObservers` → the event loop on a goroutine →
+**the AppKit run loop on the main thread**. A `panelRenderer` on `Loop.OnState` turns
+model + order + selection into `core.Layout` frames and `[]darwin.Tile`, calls `ShowPanel` on the
+first visible state and `UpdatePanel` after, `HidePanel` when hidden, and feeds the `Prefetcher` the
+visible set — every AppKit call marshalled through `darwin.OnMain`.
+
+- **`runloop.{h,m,go}`: `RunLoop()` / `StopRunLoop()`.** `RunLoop` is `CFRunLoopRun()` after
+  `-[NSApp finishLaunching]`, **not** `-[NSApp run]` — the panel is ordered in with
+  `orderFrontRegardless` and never becomes key, so nothing depends on NSApp's event-dispatch state,
+  and `CFRunLoopStop` from the shutdown goroutine breaks it cleanly where `-[NSApp run]` would wait
+  for the next event. libdispatch's main-queue source, the NSWorkspace notification source and the CA
+  transaction observer are all on that one loop.
+- **This closes P2.3b's open half.** With the main run loop turning, `NSWorkspace`'s launch/quit
+  notifications are delivered, so `-switch` sees applications that start after it. `-watch` still has
+  no run loop and keeps its backstop ticker.
+- **`Loop.Activate` now raises.** P2.5 landed, so `internal/app/loop.go`'s `Activate` calls
+  `darwin.Raise(sel.ID)` then hides, in that order. The `-switch` demo never posts `Activate` (it
+  would reorder the user's windows), so this path is exercised only once a hotkey exists → **V6.5**.
+- **No hotkey.** P0.2's `CGEventTap` is a spike and nothing routes ⌥⇥ into `Loop.Post`. `-switch`
+  scripts one `Summon` + a slow `Cycle` tick so the pipeline is demonstrable. Wiring the hotkey is
+  its own task — **P3.5**, un-roadmapped until now the way `internal/app` was before P2.7.
+- **`panelRenderer.onState` allocates two slices per state change** (`[]Tile`, `[]ThumbRequest`):
+  they go to an async `OnMain` closure and to `Prefetcher.Want`, so a reused backing array would be
+  overwritten by the next state before the main thread reads it. `core.Layout` stays 0-alloc; this
+  bridge does not → **assumption, V6.8**.
+- **The gate gained `go build ./...`.** `go vet` and `go test` compile without linking a binary, so a
+  `#cgo LDFLAGS` line missing a `-framework` slips both — P3.3 and P3.4 each hit this with QuartzCore.
+  It is not the universal `.app` build (still V6.7); it just makes "it links" a gate condition.
+- **Pre-existing, noted for V6.7:** `capture.m` uses `SCScreenshotManager` (macOS 14+) against a
+  12.0 deployment target, so `scripts/build.sh` prints `-Wunguarded-availability-new` warnings. The
+  runtime-absent path is already handled (`ErrUnavailable`, D26); the fix is an `@available` guard.
+
+Smoke-tested with no grants: `gotab -switch` builds the panel, runs the loop, scripts the summon,
+degrades cleanly (`OnError` prints the missing grant, empty panel), and exits 0 on SIGINT with the
+shutdown draining the prefetcher and observers before it stops the run loop. Pixels on screen are
+V6.2/V6.3.

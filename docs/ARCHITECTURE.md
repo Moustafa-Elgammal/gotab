@@ -32,10 +32,11 @@ assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
 ```
 
 `internal/core` is complete (Phase 1). `internal/platform/darwin` enumerates the switchable set,
-observes window events, queries Spaces, and raises / minimizes / closes windows (Phase 2, D24–D27).
-`internal/app` owns the event loop — one goroutine, no mutex (P2.7 / D22). `cmd/gotab` still only
-drives `-check` / `-list` / `-watch`: no panel and no hotkey, and it runs no main run loop yet, so the
-diagram's top row is Phase 3's.
+observes window events, queries Spaces, raises / minimizes / closes windows (Phase 2, D24–D27), and
+draws the panel, prefetches thumbnails and tracks the appearance (Phase 3, D28–D32). `internal/app`
+owns the event loop — one goroutine, no mutex (P2.7 / D22). `cmd/gotab -switch` runs the whole
+pipeline on a live AppKit run loop; what it still lacks is the ⌥⇥ hotkey (P3.5), so it scripts a
+summon rather than waiting for one.
 
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
@@ -116,7 +117,9 @@ code without a number and is carried as an explicit assumption into V6.1. What P
 where the 100 ms summon budget goes: on data, not on pixels, and not on capture, which cannot happen on
 the summon path at all.
 
-Phase 2 is closed (D24–D27). It began serial and fanned out once the C surface was carved one file pair
-per task (PARALLEL-WORK.md); the platform layer now enumerates, observes, queries Spaces and acts on
-windows. **Phase 3 (UI) is in progress and fans out the same way** — `internal/platform/darwin/panel.h`
-is frozen, and P3.1–P3.4 own one file pair each against it. See [ROADMAP.md](ROADMAP.md).
+Phases 2 and 3 both began "serial" and both fanned out once their shared surface was frozen — the C
+shim for Phase 2 (`7e7751e`), `panel.h` for Phase 3. Phase 2 is closed (D24–D27). Phase 3's four
+render tasks are done and wired (D28–D32): `gotab -switch` enumerates → orders → lays out → draws →
+prefetches → restyles on a live run loop. **What remains in Phase 3 is P3.5 (the hotkey) and the
+on-screen verification (V6.2/V6.3)** — an agent host has no window server, so pixels have only been
+checked by in-process offscreen render. See [ROADMAP.md](ROADMAP.md).

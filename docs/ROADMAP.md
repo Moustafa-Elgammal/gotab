@@ -180,32 +180,45 @@ close one. Nothing wires those into a summon path yet — that is Phase 3.
 
 ---
 
-## Phase 3 — UI (fans out off `panel.h`)
+## Phase 3 — UI (fanned out off `panel.h`; rendering done, hotkey next)
 
 Written down as serial, then carved like Phase 2: the integrator froze
 `internal/platform/darwin/panel.h` and shipped a compiling skeleton (`panel.m`, `panel.go`,
-`internal/core/layout.go`), so the four tasks run in parallel — one file pair each — against that
-header. P3.3 and P3.4 branch from a main where `panel.m` is still a skeleton and the real P3.1 lands
+`internal/core/layout.go`), so the four tasks ran in parallel — one file pair each — against that
+header. P3.3 and P3.4 branched from a main where `panel.m` was still a skeleton; the real P3.1 landed
 under them at integration. See PARALLEL-WORK.md for the ownership table.
 
-- [~] **P3.1** Panel + **single-view renderer** — `feat/P3.1`, owns `panel.m` / `panel.go`. AltTab has
-      53 NSView subclasses; we draw all tiles in one `drawRect:` and keep thumbnails in dumb CALayers
-      to keep the C→Go callback count near zero. Must render a tile with **no thumbnail yet** and fill
-      it in asynchronously — D12 makes that a launch requirement, not a refinement.
-- [~] **P3.2** Tile layout engine — `feat/P3.2`, owns `internal/core/layout.go`. Pure Go computes the
-      panel size and every tile frame; C only draws. Wraps to rows, min/max tile size, screen-scaled
-      margin, 0 allocs/op with a presized buffer.
-- [~] **P3.3** Thumbnail rendering via CALayer `contents` — `feat/P3.3`, owns `thumbnail.{h,m,go}`.
-      One capture goroutine (D26: SCK serialises), driven by `core.Cache` + P2.6's `Capture`, setting
-      each tile layer's `contents` after the panel is up. Holds every `ImageRef` it hands out and
-      releases on eviction.
-- [~] **P3.4** Theme / appearance / dark mode — `feat/P3.4`, owns `theme.{h,m,go}`. Reads the
-      effective appearance, pushes a `gt_palette` + material through P3.1's frozen setters, and
-      restyles on a Light/Dark switch without a relaunch.
+**Rendering is built and wired (D28–D32).** `gotab -switch` runs the whole pipeline — enumerate,
+order, lay out, draw, prefetch thumbnails, restyle with the appearance — on a live AppKit run loop.
+What is left in Phase 3 is P3.5 (the hotkey) and seeing it on a real screen (V6.2/V6.3).
+
+- [x] **P3.1** Panel + **single-view renderer** — `panel.m` / `panel.go` (D29). One flipped
+      `GTTileView` draws every tile in one `drawRect:`; thumbnails ride in dumb `CALayer` sublayers
+      that never call back. Placeholder art for a not-yet-captured tile (D12). Show vs update is a
+      real split (D13). Verified by in-process offscreen render; the window-server screenshot is
+      V6.2/V6.3.
+- [x] **P3.2** Tile layout engine — `internal/core/layout.go` (D28). Pure Go, integer arithmetic:
+      wraps to rows, clamps to a min/max tile size, scales the margin to the display, deterministic,
+      0 allocs/op with a presized buffer. Contract extended additively; `api.go` untouched.
+- [x] **P3.3** Thumbnail rendering via CALayer `contents` — `thumbnail.{h,m,go}` (D30). One capture
+      goroutine (D26: SCK serialises), driven by `core.Cache` + `Capture`, setting each tile layer's
+      `contents` through `OnMain`. Holds every `ImageRef` and releases it on eviction or `Stop`. The
+      thumbnail-actually-appears check is V6.4 (needs the Screen Recording grant).
+- [x] **P3.4** Theme / appearance / dark mode — `theme.{h,m,go}` (D31). Reads the effective
+      appearance (`-bestMatchFromAppearancesWithNames:`, not `AppleInterfaceStyle`), pushes a
+      `gt_palette` + HUD material through P3.1's frozen setters, and restyles on a KVO flip. The
+      integrator must call `ApplyTheme()` right after `CreatePanel()` — `runSwitcher` does.
+- [ ] **P3.5** Hotkey → loop — route ⌥⇥ (and the release) into `Loop.Post` as `Summon` / `Cycle` /
+      `Activate`. `spike/hotkey` (P0.2) is the prior art: a session-level `CGEventTap` at the head,
+      the `kCGEventTapDisabledByTimeout` re-enable, the swallow. Un-roadmapped until now, the way
+      `internal/app` was before P2.7. **acceptance:** `gotab -switch` summons on the real chord and
+      raises the selected window on release; the frontmost app is unchanged until then.
+      **`assumption`:** hotkey callback latency < 5 ms → **V6.1**.
 
 **`assumption` across Phase 3:** that the panel behaves over a full-screen app and across Spaces. The
 `collectionBehavior` flags are AltTab's prior art, not a measurement (D13), and full-screen is where
-switchers most often fail → **V6.2**
+switchers most often fail → **V6.2**. And that `panelRenderer.onState`'s per-state-change allocation
+is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slices → **V6.8**.
 
 ---
 
@@ -505,4 +518,24 @@ Append one line per session. Newest last. This is how a cold session learns what
   for wall-clock. Gate green on the skeleton.
   **Next: integrate the four branches** (P3.1 first — it is what P3.3/P3.4 assumed), then wire
   `internal/app` → `core.Layout` → `darwin.ShowPanel` and give `cmd/gotab` a real run loop.
+- `2026-09-07` — **Phase 3 rendering landed and wired (D28–D32).** All four agents came back green
+  against the frozen `panel.h`; the "heavier merge" the max fan-out traded for was in fact clean —
+  P3.2 touched only `layout.go`, P3.3/P3.4 added new file pairs, and P3.1's real `panel.m` slid under
+  them with no conflict. Merged in order P3.2 → P3.3 → P3.4 → P3.1.
+  **P3.2 (D28):** `core.Layout` — wrap, min/max clamp, display-scaled margin, deterministic,
+  0-alloc; contract extended by adding fields only. **P3.1 (D29):** one flipped `GTTileView` draws
+  every tile, thumbnails in dumb CALayers, placeholder for a not-yet-captured tile, show/update
+  split; verified by in-process offscreen render (no grant needed), window-server screenshot is
+  V6.2/V6.3. **P3.3 (D30):** one-goroutine `Prefetcher` drives `core.Cache` + `Capture`, owns and
+  releases every `ImageRef`; the thumbnail-appears / `LiveImages` checks need the Screen Recording
+  grant → V6.4. **P3.4 (D31):** palette + HUD vibrancy from the effective appearance, KVO restyle;
+  integrator calls `ApplyTheme` right after `CreatePanel`.
+  **Integration (D32):** `runloop.{h,m,go}` (`CFRunLoopRun`, not `-[NSApp run]`), a `panelRenderer`
+  on `Loop.OnState`, `Loop.Activate` now calls `darwin.Raise`. `gotab -switch` runs the whole
+  pipeline on a live AppKit loop and scripts one summon — **P2.3b's open half closes here**, since
+  the main loop now delivers `NSWorkspace` notifications. The gate gained `go build ./...` (a missing
+  `-framework` slipped `vet`+`test`; P3.3/P3.4 both hit it with QuartzCore).
+  **Next: P3.5 — route the ⌥⇥ hotkey (P0.2's spike) into `Loop.Post`.** That is the last thing
+  between `-switch`'s scripted demo and a switcher a person can use. Then V6.2/V6.3 put it on a real
+  screen.
 
