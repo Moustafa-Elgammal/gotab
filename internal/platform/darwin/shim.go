@@ -68,7 +68,7 @@ func (p Permissions) OK() bool { return p.Accessibility && p.ScreenRecording }
 
 // CheckPermissions reads the TCC state without prompting. Both answers concern the *responsible*
 // process, which under `go run` is the terminal rather than this binary — a distinction that makes an
-// ungranted event tap install cleanly and then never fire (docs/ALTTAB-LESSONS.md section 5).
+// ungranted event tap install cleanly and then never fire (docs/PLATFORM-LESSONS.md section 5).
 func CheckPermissions() Permissions {
 	return Permissions{
 		Accessibility:   C.gt_trusted() != 0,

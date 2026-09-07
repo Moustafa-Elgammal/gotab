@@ -59,9 +59,9 @@ func TestSearchScorePositions(t *testing.T) {
 		want        []int
 	}{
 		{"term", "Terminal", []int{0, 1, 2, 3}},
-		{"tab", "AltTab", []int{3, 4, 5}},
-		// Tightened right: the greedy forward pass would land on 0 and 3, the backward pass pulls
-		// the whole match onto the trailing consecutive pair.
+		// Tightened right: the greedy forward pass would take the lone leading rune, the backward
+		// pass pulls the whole match onto the trailing consecutive run.
+		{"tab", "t_tab", []int{2, 3, 4}},
 		{"ab", "a_ab", []int{2, 3}},
 		{"", "Terminal", []int{}},
 	}

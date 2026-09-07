@@ -52,7 +52,7 @@ func (m *Model) At(row int) Window {
 // Upsert inserts w or updates the existing row with the same ID, returning that row.
 //
 // A zero w.Focus on an existing window preserves the stored FocusSeq: refreshing a window whose
-// title or flags changed must not cost it its MRU position (ALTTAB-LESSONS §3). Pass a non-zero
+// title or flags changed must not cost it its MRU position (PLATFORM-LESSONS §3). Pass a non-zero
 // Focus only to restore a known ordering; the normal way to promote a window is Touch.
 func (m *Model) Upsert(w Window) (row int) {
 	if row, ok := m.byID[w.ID]; ok {

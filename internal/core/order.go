@@ -1,9 +1,9 @@
 package core
 
 // MRU ordering. Two operations may change the order and nothing else may: Promote (the user made an
-// attention decision) and Rebuild (a window appeared or vanished). docs/ALTTAB-LESSONS.md §3 is the
-// reason — AltTab shipped reorders driven by title and geometry notifications, which move the list
-// out from under a user mid-cycle.
+// attention decision) and Rebuild (a window appeared or vanished). docs/PLATFORM-LESSONS.md §3 is the
+// reason — shipped switchers have driven reorders off title and geometry notifications, which move
+// the list out from under a user mid-cycle.
 
 // NewOrder returns an Order sized to hold capacity rows without allocating. capacity is a hint, not
 // a limit: Rebuild grows Rows when the Model outgrows it, and only that growth allocates.

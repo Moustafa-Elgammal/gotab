@@ -137,7 +137,7 @@ func main() {
 	fmt.Printf("enumerated %d windows      : %6.2f ms cold, %6.2f ms warm   (ONE cgo call)\n",
 		n, float64(enum.Microseconds())/1000, float64(warm.Microseconds())/1000)
 
-	// Retina thumbnail: 400x300 points at 2x = 800x600 RGBA ~= 1.9 MB each, AltTab's rough tile scale.
+	// Retina thumbnail: 400x300 points at 2x = 800x600 RGBA ~= 1.9 MB each, a realistic tile scale.
 	const tw, th = 800, 600
 	const count = 200 // ~366 MB: far too large to hide in measurement noise
 	t = time.Now()

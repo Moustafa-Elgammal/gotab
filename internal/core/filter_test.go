@@ -167,7 +167,7 @@ func TestFilterAllows(t *testing.T) {
 	}
 }
 
-// TestFilterUnknownSpace is the case ALTTAB-LESSONS §7 exists for: an unavailable SkyLight must
+// TestFilterUnknownSpace is the case PLATFORM-LESSONS §7 exists for: an unavailable SkyLight must
 // degrade to "show everything", never to an empty switcher.
 func TestFilterUnknownSpace(t *testing.T) {
 	m := filterModel(

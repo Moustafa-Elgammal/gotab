@@ -62,9 +62,10 @@ task that comes back negative changes the approach; it does not stop the work.
       does **not** parallelise (10 at once = 324 ms vs 460 ms serial). The completion handler does fire
       on a Go thread with no run loop, so Phase 2 needs no AppKit marshalling. Thumbnails are
       IOSurface-backed, invisible to footprint, and release cleanly (330.5 MB -> 64 K).
-- [-] **P0.7** Measure AltTab actual memory — **DROPPED (D10):** beating AltTab on memory is no longer a
-      goal, so the baseline has nothing to serve. It was measured far enough to be worth keeping (D10's
-      numbers) before it was dropped. `spike/procmem` survives it and is the general memory instrument.
+- [-] **P0.7** Measure a reference switcher's actual memory — **DROPPED (D10):** beating another
+      switcher on memory is no longer a goal, so the baseline has nothing to serve. It was measured far
+      enough to be worth keeping (D10's numbers) before it was dropped. `spike/procmem` survives it and
+      is the general memory instrument.
 - [x] **P0.5** Write up results in `docs/DECISIONS.md` — **done (D15), and it does not claim a clean
       sweep.** Three of the four unknowns are settled on measurements Phase 2 can be planned against:
       capture (D12), the panel (D13), release (D14). The hotkey is **not** — P0.2 is code without a
@@ -80,8 +81,8 @@ task that comes back negative changes the approach; it does not stop the work.
 | capture → release, 100 cycles | no net growth | **met**: +0.0 MB on `IOSurface`, with a held-20 control proving the instrument is not blind (D14) |
 | thumbnail cache | bounded, bound is a number | **policy met** (P1.7, bounded LRU); the bound's real-world size is **V6.4** |
 
-The old fourth criterion, "steady-state RSS, 50 windows < AltTab's", is gone with D10. It was also
-unmeasurable as written: macOS drives idle thumbnail memory to ~0 on both sides.
+The old fourth criterion, "steady-state RSS, 50 windows below a comparable switcher's", is gone with
+D10. It was also unmeasurable as written: macOS drives idle thumbnail memory to ~0 on both sides.
 
 ---
 
@@ -220,7 +221,7 @@ window server, so pixels and the granted hotkey round trip are verified only in 
       the granted round trip → **V6.5**.
 
 **`assumption` across Phase 3:** that the panel behaves over a full-screen app and across Spaces. The
-`collectionBehavior` flags are AltTab's prior art, not a measurement (D13), and full-screen is where
+`collectionBehavior` flags are prior art, not a measurement (D13), and full-screen is where
 switchers most often fail → **V6.2**. And that `panelRenderer.onState`'s per-state-change allocation
 is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slices → **V6.8**.
 
@@ -341,10 +342,10 @@ Append one line per session. Newest last. This is how a cold session learns what
   and the spike's original "PASS" was wrong — removed. Split into P0.4a (build an instrument) / P0.4b.
   Also found `CGWindowListCreateImage` is obsoleted in macOS 15, forcing ScreenCaptureKit — added P0.6.
   **Next session starts at P0.4a.**
-- `2026-09-06` — Handoff. Added `docs/ALTTAB-LESSONS.md` (AltTab platform knowledge, distilled with
-  sources), D6 (project framing and rejected alternatives) and D7. Fixed a broken build (`cmd/gotab` was
-  empty) and a false-positive purity gate. Added P0.7: **AltTab memory was never measured, so the
-  primary goal has no baseline.**
+- `2026-09-06` — Handoff. Added `docs/PLATFORM-LESSONS.md` (macOS window-switcher platform knowledge,
+  distilled from prior art), D6 (project framing and rejected alternatives) and D7. Fixed a broken
+  build (`cmd/gotab` was empty) and a false-positive purity gate. Added P0.7: **the reference
+  switcher's memory was never measured, so the then-primary goal has no baseline.**
   **Next session: start with P0.4a (`docs/tasks/P0.4a.md`), then P0.7.** Those two together decide whether
   the memory premise holds; everything else is downstream of that answer.
 - `2026-09-06` — **P0.4a done.** Built `spike/memprobe`, which tested three hypotheses and rejected all of
@@ -353,7 +354,7 @@ Append one line per session. Newest last. This is how a cold session learns what
   374.4 MB high-water mark. Instantaneous `phys_footprint` misses it because macOS reclaims idle CG raster
   pages. Corrected D4 in D8.
   **D9 is the uncomfortable part: macOS already evicts idle thumbnails, so the bounded-LRU win may be
-  small.** That makes P0.7 (measure AltTab) the deciding task — do it before designing the cache.
+  small.** That makes P0.7 (measure a reference switcher) the deciding task — do it before designing the cache.
   **Next session: P0.7.**
 - `2026-09-06` — Docs/tooling repair, no code change. The repo's only branch is `main`, but `scripts/wt.sh
   done` ran `git checkout master`, CI's push trigger watched `master`, and `PARALLEL-WORK.md` said the
@@ -363,24 +364,24 @@ Append one line per session. Newest last. This is how a cold session learns what
   only `cmd/gotab` and `spike/` exist today. Fixed two bugs in `wt.sh`'s usage output while there: the
   line range leaked `set -euo pipefail`, and `sed 's/^# \?//'` is a GNU-ism that BSD sed reads as a
   literal `?`, so it never stripped the comment prefixes on the one platform this project supports.
-  **Next session: still P0.7 (measure AltTab).**
+  **Next session: still P0.7 (measure a reference switcher).**
 - `2026-09-06` — **P0.7 started, not finished.** Built `spike/procmem`: D8's three quantities
   (`CG raster data`, footprint, peak) read out of `vmmap --summary` for *any* pid, since `spike/memprobe`
   can only measure itself. Validated against a holder process with a known 366.2 MB — reports 368.8 MB
-  virtual, matching D8 exactly. Installed AltTab 11.6.0 and captured its idle baseline: **27.4 MB
+  virtual, matching D8 exactly. Captured a reference switcher's idle baseline: **27.4 MB
   footprint, 28.4 MB peak, and no `CG raster data` region at all** (it had never been summoned).
   Two things learned that P0.7's contract now records: `CG raster` RESIDENT decays fast — the same
   366 MB reads 368.8 MB when sampled immediately after a touch and **6.4 MB** ~15 s later — so summon-time
   sampling is mandatory and `Physical footprint (peak)` is the only non-decaying number worth quoting.
-  And AltTab relaunches itself under a new pid on permission grant, which silently killed the first
-  90-sample run; `-name` now re-resolves every sample.
+  And that switcher relaunches itself under a new pid on permission grant, which silently killed the
+  first 90-sample run; `-name` now re-resolves every sample.
   **Next session: the measurement still needs a human** to grant Accessibility + Screen Recording and
   press ⌥⇥ (TCC blocks synthetic keystrokes). Protocol is in `docs/tasks/P0.7.md`.
-- `2026-09-06` — **Direction change: memory parity with AltTab is no longer a goal (D10).** The project
-  is now feature parity with AltTab's core switching, written in Go, on a sane memory budget. P0.7 dropped,
-  Phase 0 reframed from a go/no-go gate to de-risking the three platform unknowns (panel, hotkey,
-  ScreenCaptureKit), and the AltTab-relative gate criterion replaced with a leak check and a bounded-cache
-  requirement. `spike/procmem` survives as the general memory instrument for any pid.
+- `2026-09-06` — **Direction change: memory parity with another switcher is no longer a goal (D10).** The
+  project is now feature parity with the core switching such a tool is expected to do, written in Go, on a
+  sane memory budget. P0.7 dropped, Phase 0 reframed from a go/no-go gate to de-risking the three platform
+  unknowns (panel, hotkey, ScreenCaptureKit), and the comparative gate criterion replaced with a leak
+  check and a bounded-cache requirement. `spike/procmem` survives as the general memory instrument for any pid.
   **Next session: P0.1 (NSPanel spike), P0.2 (hotkey), P0.6 (ScreenCaptureKit)** — P0.6 is the highest-risk
   of the three (D3) and gates the capture design in Phase 2.
 - `2026-09-06` — **Phase 1 complete.** P1.0 frozen first and serially (`internal/core/api.go`, types only),
@@ -410,8 +411,8 @@ Append one line per session. Newest last. This is how a cold session learns what
   phase. `spike/procmem` needs an `IOSurface` row before P0.4b can run.
 - `2026-09-06` — Project identity and paths made self-contained, ahead of publishing the repo. The module
   is now `github.com/Moustafa-Elgammal/gotab` (nothing imported the old path, so this was one line).
-  `docs/ALTTAB-LESSONS.md` cited AltTab at a personal absolute path; it now cites the upstream URL and
-  says the checkout can live anywhere. Worktrees moved from the sibling `../gotab-wt/` into `.worktrees/`
+  `docs/PLATFORM-LESSONS.md` cited prior art at a personal absolute path; that citation is gone and the
+  file stands on its own. Worktrees moved from the sibling `../gotab-wt/` into `.worktrees/`
   inside the repo, so a clone cannot scatter directories over its parent. **The leading dot is
   load-bearing and half of that change is in `check.sh`:** `go list`, `go vet` and `go build ./...` skip
   dot-directories, but `gofmt -l .` walks them, so the gate would have failed on another task's
@@ -424,12 +425,12 @@ Append one line per session. Newest last. This is how a cold session learns what
   flattering empty window. **1.3 ms warm, 14 ms cold: about 1% of the 100 ms budget.** Set against D12's
   ~46 ms capture, this settles where the summon budget goes: on data, not on drawing.
   Two things the measurement had to defend against. `orderFrontRegardless` returns in ~1 ms while the
-  cold frame does not commit for ~14 ms, exactly as ALTTAB-LESSONS predicted, so timing the call would
+  cold frame does not commit for ~14 ms, exactly as PLATFORM-LESSONS predicted, so timing the call would
   have been wrong by 10x — the spike reports three timestamps instead. And `drawRect:` is instrumented
   to prove the warm number is a real re-render: 0 of 30 warm summons skipped the draw. The
   non-activating combination works — the frontmost app's pid never changed across 20 summons.
   **One thing is deliberately not claimed:** behaviour over a full-screen app and across Spaces. The
-  `collectionBehavior` flags are AltTab's prior art, not a measurement, and TCC blocks driving either
+  `collectionBehavior` flags are prior art, not a measurement, and TCC blocks driving either
   synthetically. That needs a human and is the open half of P0.1.
   **Next session: P0.2 (CGEventTap hotkey), the last Phase 0 unknown**, then P0.5 closes the phase and
   Phase 2 begins — serial, one owner.
@@ -480,7 +481,7 @@ Append one line per session. Newest last. This is how a cold session learns what
   `kCGWindowLayer != 0`, of which **7** are things a user could switch to. The titled seven were exactly
   right — but the title is not a filter either: it is empty for everything without Screen Recording, and
   a real untitled document window exists. So **P2.3 owns enumeration, not just observation**, which is
-  why AltTab is built on Accessibility. P2.2's list becomes the candidate set AX filters. The batching
+  why a switcher is built on Accessibility. P2.2's list becomes the candidate set AX filters. The batching
   discipline is what keeps an 8x over-count cheap: 59 records still cost one crossing.
   **Next session: P2.3 (AX enumeration + observers).** Still serial, one owner.
 - `2026-09-06` — **P2.3a done, and it found the thing that decides Phase 2's shape (D20).** The

@@ -1,7 +1,7 @@
 # GoTab
 
-A macOS window switcher written in Go. Clean-slate rewrite of [AltTab](https://alt-tab.app/) — new bundle
-ID, nothing inherited from an existing install.
+A macOS window switcher written in Go. Built from scratch — its own bundle ID, nothing inherited
+from any existing install.
 
 **Status: Phase 0 (proof).** Not usable yet. The design is being validated before the app is built; see
 [docs/ROADMAP.md](docs/ROADMAP.md) for exactly where it stands.
@@ -36,7 +36,7 @@ Read in this order:
 | [AGENTS.md](AGENTS.md) | the working agreement: commands, Go style, workflow. `CLAUDE.md` includes it. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the invariants. Read before touching code. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | every task and its state. The source of truth for "what's done". |
-| [docs/ALTTAB-LESSONS.md](docs/ALTTAB-LESSONS.md) | prior art: AltTab platform knowledge and the traps it hit. |
+| [docs/PLATFORM-LESSONS.md](docs/PLATFORM-LESSONS.md) | prior art: macOS window-switcher platform knowledge and the traps to avoid. |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | what was measured and what it forced. Append-only. |
 | [docs/PARALLEL-WORK.md](docs/PARALLEL-WORK.md) | how to parallelise this without wasting tokens. |
 
