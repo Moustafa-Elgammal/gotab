@@ -178,10 +178,19 @@ func listOneSource(raw bool) int {
 	return 0
 }
 
-// watchWindows runs the event loop until interrupted. Rescans are driven by a ticker, which is a
-// stand-in and says so: P2.3b's Accessibility observers are what should post them, and they are
-// blocked until this package exists. The ticker is deliberately in the command and not in the loop —
-// polling is not the design, it is scaffolding for looking at the loop before the observers land.
+// watchWindows runs the event loop until interrupted. Rescans are driven by P2.3b's Accessibility
+// observers — one AXObserver per regular application, posting Loop.Rescan when a window is created,
+// destroyed, focused, minimized or deminiaturized. A rescan is a hint, not a diff: the loop
+// re-enumerates and reconciles, and D22's depth-1 latch coalesces a burst into one pass.
+//
+// The slow ticker below is a backstop, not polling-as-design. P2.3b measured that NSWorkspace's
+// application-launch notification is delivered only by a running MAIN run loop, which cmd/gotab does
+// not run until Phase 3 hands the thread to AppKit — so until then an application launched *after*
+// gotab started is never observed, and a 2 s sweep is what catches its windows. Windows of
+// already-running apps need no ticker; the observers post them immediately.
+//
+// Without the Accessibility grant StartObservers returns ErrNotTrusted and the fallback is the old
+// 500 ms poll, so `-watch` still shows something and says why.
 //
 // It doubles as P2.7's acceptance check for MRU stability: rescans run continuously, and if a
 // re-enumeration disturbed the order the printed list would visibly churn. It does not.
@@ -213,8 +222,18 @@ func watchWindows() int {
 		}
 	}
 
+	// Observers first; the ticker's only remaining job is the NSWorkspace-without-a-main-run-loop gap.
+	backstop := 2 * time.Second
+	if err := darwin.StartObservers(l.Rescan); err != nil {
+		backstop = 500 * time.Millisecond
+		fmt.Fprintf(os.Stderr, "gotab: observers unavailable (%v) — polling every %s instead\n", err, backstop)
+	} else {
+		defer darwin.StopObservers()
+		fmt.Println("observers active — window events drive the rescan.")
+	}
+
 	go func() {
-		t := time.NewTicker(500 * time.Millisecond)
+		t := time.NewTicker(backstop)
 		defer t.Stop()
 		for {
 			select {

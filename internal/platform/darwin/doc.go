@@ -17,10 +17,12 @@
 // buffer so one crossing serves N items, and bitmaps handed out as opaque handles rather than
 // pointers. Later tasks add functions to that shim; they do not invent a second shape.
 //
-// Bitmaps have no producer until P2.6. ImageRef, its release path and the live counter exist ahead of
-// it on purpose, so the task that starts allocating megabytes is not also the task deciding how they
-// are freed. The debug-build finalizer that ARCHITECTURE.md describes as a leak-detection backstop
-// lands with that producer — a finalizer on a type nothing constructs would only rot.
+// P2.6 is the bitmap producer: Capture returns an ImageRef the caller must Release, and gt_image_adopt
+// counts it into gt_image_live so LiveImages() is the leak assertion V6.4 needs. The debug-build
+// finalizer ARCHITECTURE.md describes as a backstop was NOT added — Capture returns ImageRef by value,
+// so there is no stable heap object to attach one to without racing the caller's copy (D26). It would
+// need ImageRef handed out as a pointer, which changes a frozen type; the finalizer was always a
+// detector, never the mechanism, so ARCHITECTURE.md's rule stands unchanged.
 //
 // This package is deliberately not unit-tested. It is the humble object — correctness here is
 // verified at runtime by the spikes under spike/, not by mocks.

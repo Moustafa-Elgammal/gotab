@@ -31,9 +31,11 @@ assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
   internal/platform/darwin     cgo + Objective-C. All IPC, all AppKit, all bitmaps.
 ```
 
-`internal/core` is complete (Phase 1) and `internal/platform/darwin` is a shim skeleton that links but
-queries nothing yet (P2.1). **`internal/app` does not exist**, so nothing currently owns the event loop —
-that is Phase 2's to build, and until it does, the diagram is the target rather than the tree.
+`internal/core` is complete (Phase 1). `internal/platform/darwin` enumerates the switchable set,
+observes window events, queries Spaces, and raises / minimizes / closes windows (Phase 2, D24–D27).
+`internal/app` owns the event loop — one goroutine, no mutex (P2.7 / D22). `cmd/gotab` still only
+drives `-check` / `-list` / `-watch`: no panel and no hotkey, and it runs no main run loop yet, so the
+diagram's top row is Phase 3's.
 
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
@@ -114,5 +116,6 @@ code without a number and is carried as an explicit assumption into V6.1. What P
 where the 100 ms summon budget goes: on data, not on pixels, and not on capture, which cannot happen on
 the summon path at all.
 
-Phase 2 is in progress and **does not fan out** — one owner, sequential, because it shares the C shim and
-the main thread. See [ROADMAP.md](ROADMAP.md).
+Phase 2 is closed (D24–D27). It began serial and fanned out once the C surface was carved one file pair
+per task (PARALLEL-WORK.md); the platform layer now enumerates, observes, queries Spaces and acts on
+windows. **Phase 3 (UI) is serial** — one owner, shared panel and main thread. See [ROADMAP.md](ROADMAP.md).

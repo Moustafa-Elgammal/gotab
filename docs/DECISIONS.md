@@ -824,3 +824,177 @@ work back into an earlier one rather than being absorbed locally. D16 listed fou
 this; P2.4 has since retired part of one and P2.6 has added two more (weak-linking, and a live-image
 counter with no producer). The mitigation is visibility — an assumption written down where it is used
 is recoverable; one carried in someone's head is what makes the rework expensive.
+
+---
+
+## D24 · P2.4: D20's "it must be on another Space" does not hold — 2026-09-07
+
+`core.SpaceID` is now populated by `CurrentSpace()` / `SpacesOf()` / `Spaces()` (`space.{h,m,go}`).
+SkyLight is reached through `dlopen`/`dlsym`, not a linked private framework, so `scripts/build.sh` is
+untouched and a moved symbol degrades one field to "unknown" rather than failing the launch.
+
+**Measured on a live session, both TCC grants held, five runs:**
+
+| | |
+|---|---|
+| `Spaces()` | `[1]` — one display, one Space, `id64 = 1` |
+| `CurrentSpace()` | `1`, stable across 5 consecutive calls, every run |
+| CoreGraphics layer-0 candidates | 54–63 |
+| Accessibility switchable set | 5–7 |
+| **windows on a Space other than the current one** | **0, every run** |
+| `SpacesOf` over 54–63 ids | 1.4–4.8 ms total, 22–87 µs/window, one crossing |
+
+**D20 guessed** the Chrome window Accessibility failed to enumerate was on another Space. It was not:
+both AX-invisible windows (an untitled Chrome window and Claude's) sat on Space 1 — the Space the user
+was looking at — on a machine with no second Space to be on. A window can be invisible to Accessibility
+while on the current Space, so D20's guess is not a general rule.
+
+**Still open, needs a human.** With one Space there is no way to confirm the converse — that a window
+genuinely on a second Space reports a `SpaceID != CurrentSpace()`. The negative is established; the
+positive is V6.2's, which already has a human in front of multiple Spaces.
+
+`0` stays "unknown" and is not a silent default: `SpacesOf([999999 1])` returns `[0 1]`, so the
+WindowServer declines rather than falling back to the current Space. `Rules.CurrentSpace = 0` must keep
+meaning "do not filter by Space" — 46–54 of 63 windows report 0, and a filter that read unknown as
+off-Space would empty the switcher.
+
+**A lead, not followed:** `CGSCopyWindowsWithOptionsAndTags` inverts the query to one round trip per
+Space, but disagreed with `SpacesOf` on exactly the two windows AX also could not see — a difference of
+meaning ("assigned to" vs "ordered in on"), and validating it needs a multi-Space machine.
+
+---
+
+## D25 · P2.5: raising a window is two independent halves — 2026-09-07
+
+`Raise` / `Minimize` / `Unminimize` / `Close` (`action.{h,m,go}`) turn the platform layer from an
+enumerator into a switcher. There is no public lookup from a `CGWindowID` to an `AXUIElement`, so each
+asks CoreGraphics for the owning pid and searches only that process, with a fallback scan of every
+regular application for windows AX knows and the WindowServer's list does not (D20). A stale id costs
+~24 ms and returns `ErrNoWindow`, never a panic — that race is the normal case for a list that was out
+of date when it was drawn.
+
+**Measured on macOS 26.6.2, four trials per variant:**
+
+- **`kAXRaiseAction` never answers during the Dock's restore animation.** A just-unminimized window
+  burns the full messaging timeout and returns `kAXErrorCannotComplete` (−25204) — 251–255 ms, against
+  0.2–0.4 ms for the unminimize and the attribute writes around it. The action still lands; only the
+  reply is missing. That one call now gets a 20 ms timeout and reads `kAXErrorCannotComplete` as
+  success: same 4/4, 28–35 ms instead of 258–292 ms.
+- **Restoring from the Dock does not raise the window inside its app.** Skipping the raise for a
+  just-unminimized window is the obvious way to dodge the timeout above and is wrong: 0/4 put the
+  window at the front of its app, though 4/4 still made the app frontmost. The two halves of a switch
+  are genuinely independent.
+- **Activation must not hang off the raise.** The first version returned early on a failed raise, so
+  every minimized window hit the timeout and then never activated — the user watched the window
+  un-minimize behind whatever they were leaving. `activate_app` now runs regardless of what the raise
+  returned.
+
+**`CGWindowListCopyWindowInfo` reports already-closed windows.** Finder windows closed through this API
+stayed in the CG list — and so in P2.3c's join — while AX had already dropped them. `Close` is correct
+(3/3 against the AX count); this is why resolution never trusts CoreGraphics past the pid.
+
+**`GT_ERR_NO_WINDOW = 6`** extends `shim.h`'s frozen status enum from `action.h`; `action.go`'s
+`actionError` maps it, the same shape as `shim.go`'s `statusError` for the other five. A later task
+adding a status of its own must reconcile the two numbering spaces — the closed enum is still the
+design.
+
+**Not verified (assumption → V6.5):** the `ErrNotTrusted` path (the terminal holds the grant and
+revoking it would cost the session) and `ErrUnavailable` from `Close` on a window with no close button
+(none was available). Both branches are written; neither is run.
+
+---
+
+## D26 · P2.6: capture confirms D12, and the live counter had no producer — 2026-09-07
+
+`Capture(id, maxWidth)` (`capture.{h,m,go}`) grabs one window through ScreenCaptureKit, downscaled in
+`SCStreamConfiguration` at capture time — the full-res bitmap is never allocated. `64/200/400/800` px
+bounds produce exactly `64×42 / 200×130 / 400×263 / 800×527`; anything above the window's own size
+clamps rather than upscales.
+
+**Measured, macOS 26.6.2, 65–77 layer-0 windows on screen:**
+
+- **Cost: 193 ms cold, 57 ms warm, 56.7 ms mean over 100 cycles.** D12's ~112/~46 was a quieter
+  machine; the shape holds and the conclusion stands — **capture never runs on the summon path.**
+- **Release is clean, and the instrument was shown able to see it.** 100 cycles with no images held:
+  `IOSurface` +0.0 MB. The run then ends holding 14 thumbnails on purpose: +2.3 MB against 2.1 MB
+  declared, all given back on release — D14's control, so the zero is a measurement not a blind gauge.
+- **The timeout fires and leaves nothing behind.** Forced with a 1 ms bound against a warm cache:
+  40/40 returned `ErrTimeout`, slowest call 21 ms, all 40 abandoned completion handlers fired later
+  into a context nobody waited on with no crash and `IOSurface` at 0.0 MB. This is why the capture
+  context is heap-allocated and reference-counted rather than `__block` on the stack.
+- **A 2–10% ordinary failure rate a caller must expect.** Windows `CGWindowList` reports and SCK will
+  not capture, or that closed during the run; retrying twice recovered none. Mapped to `ErrUnavailable`
+  (a normal event for a prefetcher), not `ErrInternal` (which must keep meaning "a bug in this shim").
+- **Concurrency is safe but pointless** — SCScreenshotManager serialises in the WindowServer (D12), so
+  a prefetcher uses one goroutine, not a pool. **A stale cache entry never self-heals**: the
+  shareable-window list refreshes on a miss only, so a closed-but-cached window fails every capture
+  until something else forces a refresh.
+
+**The live counter had no producer side.** `gt_image_live()` reports `shim.m`'s `static
+g_images_live`, and `gt_image_release` — the only function touching it — decrements. Every handle was
+born uncounted, so `LiveImages()` read 0 while images were held and went negative after (measured −181
+over a soak). A counter that only counts down is worse than none: V6.4's leak assertion would have been
+written against it and passed. The integrator added `gt_image_adopt` to the frozen `shim.{h,m}` (P2.6
+owns neither); `capture.m` adopts at the line it had marked. `LiveImages()` now reads 0 at rest, 1..5
+as handles are taken, 0 after release, and 0 after a double release.
+
+**No `runtime.SetFinalizer` backstop, and the reason is structural.** `Capture` returns `ImageRef` **by
+value**, so there is no stable heap object to attach a finalizer to; attaching one to a local before
+copying it out would free the bitmap while the caller's copy still points at it. A debug backstop needs
+`ImageRef` handed out as a pointer, which changes a frozen type and the contract's signature.
+ARCHITECTURE.md is unaffected — the finalizer was always a detector, never the mechanism.
+
+**`scripts/build.sh` weak-links ScreenCaptureKit.** SCK arrives in macOS 12.3 and the floor is 12.0
+(D17), so a hard link makes the bundle refuse to *launch* on 12.0–12.2 — a launch failure, not a
+missing feature. `capture.go` carries both links behind the `gotab_weak_sck` build tag, and cgo
+evaluates the tag before its LDFLAGS allowlist, so a plain `go build`/`test`/`vet` links hard and needs
+no environment (the gate is unaffected). Only `build.sh` sets the tag and
+`CGO_LDFLAGS_ALLOW='-Wl,-weak_framework.*'`; `otool -L` then shows `ScreenCaptureKit ... , weak)`.
+
+**assumptions → V6.4:** a 50-window Retina cache staying inside a sane bound (D14 saw 8.3 MB for 20
+tiles at 400 px — the shape, not the number); and the 2 s `captureTimeout` being headroom over the
+cold capture, not a measured tail latency under load.
+
+---
+
+## D27 · P2.3b: AX observers, and the one thing they need a main run loop for — 2026-09-07
+
+`StartObservers(onChange)` / `StopObservers()` (`observe.{h,m,go}`) register one `AXObserver` per
+regular application for `kAXWindowCreated`, `kAXUIElementDestroyed`, `kAXFocusedWindowChanged`,
+`kAXWindowMiniaturized` and `kAXWindowDeminiaturized`, and follow applications launching and quitting
+via `NSWorkspace`. Every notification ends in one line — `goObserveChange()` — on a run loop this shim
+owns, never the main one: that traffic must not sit in front of the summon path's pixels, and the main
+loop may not be running when `StartObservers` is called. `cmd/gotab -watch` now rescans on events, with
+a slow ticker demoted to a backstop.
+
+**Measured on this machine, throwaway `package main`:**
+
+- **`NSWorkspace` launch/terminate needs a running MAIN run loop; nothing else here does.** With
+  `CFRunLoopRun` on the main thread, a launched app and its new windows are seen; with no main run loop
+  anywhere they are **never** delivered — not late, not on another thread. `queue:nil` vs
+  `[NSOperationQueue mainQueue]` changes nothing; it is the *posting* that needs the loop. The AX
+  observers themselves fire normally without one. **`cmd/gotab` runs no main run loop until Phase 3**,
+  so today the symptom is "sees the apps that were open when it started, and no others" — stated as a
+  precondition in `observe.h` and the `StartObservers` doc, and covered by the backstop ticker.
+- **A freshly launched app registers only *some* of the five, and drops the two that matter.** Against
+  TextEdit one dispatch after its launch notification: `kAXWindowCreated`, `kAXWindowMiniaturized`,
+  `kAXWindowDeminiaturized` succeeded; `kAXUIElementDestroyed` and `kAXFocusedWindowChanged` returned
+  `kAXErrorCannotComplete`. A retry gated on "did anything register" would leave the app permanently
+  half-observed, so the gate is "all five": a per-pid bitmask retried on `{0,250,500,1000,2000,4000}`
+  ms, asking only for what is missing.
+- **`kAXUIElementDestroyed` on the *application* element does report descendant windows** — closing one
+  TextEdit document while the app stayed alive delivered it. It is also the noisiest of the five (13 in
+  a row during one deminiaturize), which is what D22's depth-1 latch is for.
+- **Background apps trickle `kAXFocusedWindowChanged` on an idle machine** (Docker Desktop, Finder, in
+  pairs every few seconds), and **`NSWorkspace` reports every helper process** — every `osascript` is a
+  launch and a terminate. `onChange` is therefore not rare and not evidence anything changed; terminate
+  is filtered to pids actually observed or `.Regular` apps (2 spurious rescans per shell command → 0).
+- **Leak measurement.** `leaks` over 20 `Start`/`Stop` cycles: zero `AXObserverRef`, zero
+  `CFRunLoopSource` from the start. One leak in the first draft — the observer thread's run loop,
+  `CFRetain`'d and never released (20 × `ROOT LEAK <CFRunLoop>`); now released in `gt_observers_stop`
+  after `g_posting` (threads inside `run_on_observer_thread`) drains to zero. Down to one 32-byte
+  system `xpc_date_t`.
+
+**assumption → V6.9:** behaviour under an Accessibility grant revoked mid-run. `gt_observers_start`
+checks `AXIsProcessTrusted()` up front but nothing re-checks, and what macOS does to a live
+`AXObserverRef` on revocation is untested — it needs a human toggling System Settings during a run.

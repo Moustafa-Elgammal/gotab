@@ -101,13 +101,17 @@ Independent, testable, no macOS needed. **This is where multi-agent parallelism 
 
 ---
 
-## Phase 2 — Platform bridge (was serial; fans out from P2.3b on)
+## Phase 2 — Platform bridge (complete)
 
 P2.1 through P2.3c were built by one owner, sequentially, because every task wanted to edit `shim.h`
 and `shim.m`. That was a fact about the file layout rather than about the work, and carving one file
-pair per task removed it: **P2.3b, P2.4, P2.5 and P2.6 run in parallel**, one worktree each, against a
+pair per task removed it: **P2.3b, P2.4, P2.5 and P2.6 ran in parallel**, one worktree each, against a
 frozen `shim.{h,m,go}` / `window.go` / `doc.go`. See PARALLEL-WORK.md for the ownership table — and
 note that `ROADMAP.md`, `DECISIONS.md` and all wiring stay with the integrator, not the agents.
+
+**All of Phase 2 is landed (D24–D27).** The platform layer enumerates the switchable set, reacts to
+window events instead of a ticker, knows each window's Space, and can raise / minimize / unminimize /
+close one. Nothing wires those into a summon path yet — that is Phase 3.
 
 - [x] **P2.1** C shim skeleton + cgo build integration — **done, and it caught a shipped bug (D17).**
       `internal/platform/darwin` compiles Objective-C, links, and ships in the universal `.app`; the
@@ -124,16 +128,20 @@ note that `ROADMAP.md`, `DECISIONS.md` and all wiring stay with the integrator, 
       truncate on a character boundary (`CFStringGetBytes`, not `CFStringGetCString`). Observable with
       `gotab -list`. **The find (D19): this is not the switchable set** — 59 layer-0 windows, 7 of them
       switchable.
-- [~] **P2.3** AX enumeration + observers — **split three ways**, following P0.4's precedent. D19 moved
-      enumeration in here; D20 then showed enumeration alone is not enough.
+- [x] **P2.3** AX enumeration + observers — **split three ways**, all landed. D19 moved enumeration in
+      here; D20 then showed enumeration alone is not enough.
   - [x] **P2.3a** AX enumeration — `kAXWindowsAttribute` per regular application, one crossing.
         **Done: 5 switchable windows against CoreGraphics' 59 candidates, and 5 of 5 carry an ID
         CoreGraphics also reports** — which is the evidence that the private `_AXUIElementGetWindow`
         returns real window numbers. `FlagMinimized`/`FlagHidden` come from AX rather than a guess, and
         each app element has a 0.25 s messaging timeout so a wedged app is skipped, not waited on.
-  - [~] **P2.3b** AX observer registration; callbacks enqueue and return, nothing else.
-        **Unblocked by P2.7** — `Loop.Rescan` and `Loop.Post` are the enqueue targets, and both are
-        non-blocking by construction (D22), which is what a callback needs. This is the next task.
+  - [x] **P2.3b** AX observer registration; callbacks enqueue and return, nothing else. **Done (D27):**
+        one `AXObserver` per regular application for the five window notifications, on a run loop the
+        shim owns; `observe_callback` is one line into Go. `cmd/gotab -watch` rescans on events now, a
+        slow ticker demoted to a backstop. **`assumption`:** `NSWorkspace` launch/quit notifications
+        need a running main run loop, which `cmd/gotab` has none of until Phase 3, so an app launched
+        after gotab is unseen until the backstop sweep; and a grant revoked mid-run is untested →
+        **V6.9**.
   - [x] **P2.3c** Join the two enumerations on `CGWindowID` — **done (D21): 58 candidates + 5 AX → 7
         switchable, with both of D20's misses recovered and 0 titled windows excluded.** The rule is
         `activation policy is not prohibited` AND `has a title`; policy alone admitted 37 untitled
@@ -141,22 +149,34 @@ note that `ROADMAP.md`, `DECISIONS.md` and all wiring stay with the integrator, 
         TCC grant:** CoreGraphics titles need Screen Recording, so without it the recovery branch is
         inert and the list degrades to the AX set — reported by `MissingRecovery`, not hidden. The lead
         that would remove that dependency (`kCGWindowBounds` needs no grant) is recorded in D21.
-- [~] **P2.4** SkyLight/CGS notification tap **and Space query**. **Promoted by D20:** the likeliest
-      reason AX cannot see Chrome's second window is that it is on another Space, and nothing here
-      confirms that because driving a Space change needs a human. This is the task that turns the guess
-      into a number. `SpaceID` 0 must stay distinguishable from a real Space (P1.0).
+- [x] **P2.4** SkyLight/CGS Space query. **Done (D24), and it did not uphold D20's guess:** on a
+      one-Space machine both windows AX could not see sat on the *current* Space, so "it must be on
+      another Space" is not a general rule. `CurrentSpace()` / `SpacesOf()` / `Spaces()` populate
+      `core.SpaceID` in one crossing; a bogus id returns 0, not a fabricated Space. SkyLight is
+      `dlopen`/`dlsym`, so no build change. **`assumption`:** the converse — a window genuinely on a
+      second Space reporting a different `SpaceID` — needs a second Space and therefore a human →
+      **V6.2**.
 - [x] **P2.7** `internal/app` — the event loop. **Done (D22).** Listed out of order because it was
       missing from the roadmap entirely: `ARCHITECTURE.md` has had `internal/app` in its diagram from
       the start and no task ever built it, which P2.3b surfaced by having nowhere to enqueue to. One
       goroutine owns `Model`, `Order` and `Selection`; no mutex in the package. `Post` never blocks and
       a full queue drops; `Rescan` is a depth-1 latch where dropping is *correct*. Re-enumeration
       preserves MRU by upserting with a zero `FocusSeq`. Observable with `gotab -watch`.
-- [~] **P2.5** Focus / raise / minimize / close actions — **the next thing that makes the app do
-      something.** `Loop.Activate` is a state change with no raise behind it until this lands.
-- [~] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Captures
-      ahead of summon, never during it** (D12), and must treat a capture as failable and time-bounded.
-      **`assumption`:** that a 50-window cache at Retina resolution stays inside a sane bound. D14
-      measured 8.3 MB for 20 tiles at 400 px, which is the shape and not the number → **V6.4**
+- [x] **P2.5** Focus / raise / minimize / close actions. **Done (D25):** `Raise` / `Minimize` /
+      `Unminimize` / `Close` resolve a `CGWindowID` to an `AXUIElement` via the owning pid, with a scan
+      fallback for windows only AX knows (D20). A stale id returns `ErrNoWindow` (new status
+      `GT_ERR_NO_WINDOW = 6`, extending the frozen enum from `action.h`), never a panic. `Loop.Activate`
+      still only changes state — putting the raise behind it is Phase 3's. **`assumption`:** the
+      `ErrNotTrusted` and no-close-button paths are written but unrun → **V6.5**.
+- [x] **P2.6** Thumbnail capture with explicit C-side lifecycle — wired to P1.7's policy. **Done
+      (D26):** `Capture(id, maxWidth)` downscales in `SCStreamConfiguration` at capture time, is
+      2 s-time-bounded, and returns an `ImageRef` the caller must `Release`. 193 ms cold / 57 ms warm
+      confirms D12; capture stays off the summon path. The integrator added `gt_image_adopt` to the
+      frozen `shim.{h,m}` so the live counter has a producer — `LiveImages()` returns to 0, not −1 —
+      and `scripts/build.sh` weak-links ScreenCaptureKit (arrives 12.3, floor is 12.0) so the bundle
+      still loads on 12.0–12.2. **`assumption`s:** a 50-window Retina cache staying inside a sane bound
+      (D14 saw 8.3 MB for 20 tiles at 400 px — shape, not the number), and the 2 s capture timeout
+      being headroom not a measured tail → **V6.4**.
 
 ---
 
@@ -432,4 +452,31 @@ Append one line per session. Newest last. This is how a cold session learns what
   `TestModelUpsertZeroFocusPreserves`.
   **Next session: P2.3b (AX observers, now unblocked), then P2.5 (raise).** P2.5 is the one that makes
   the app do something: `Loop.Activate` is a state change with nothing behind it until then.
+- `2026-09-07` — **Phase 2 closed. The fan-out's four tasks are all landed (D24–D27).** P2.4, P2.5 and
+  P2.6 had merged their code earlier but left `ROADMAP.md` and `DECISIONS.md` to the integrator (the
+  fan-out rule in PARALLEL-WORK.md); this session consolidated them and integrated P2.3b, whose code
+  had been sitting uncommitted in its worktree.
+  **P2.4 (D24):** `core.SpaceID` is populated, and D20's guess did not survive contact — on a one-Space
+  machine both windows Accessibility could not enumerate sat on the *current* Space, so "invisible to
+  AX ⇒ on another Space" is false. The converse (a real second-Space window reporting a different id)
+  still needs a human → V6.2. SkyLight via `dlopen`, so no build change.
+  **P2.5 (D25):** raise / minimize / unminimize / close. The finding is that a switch is two
+  independent halves — `kAXRaiseAction` orders the window inside its app, `activateWithOptions:` makes
+  the app frontmost, and restoring from the Dock does the second without the first. `kAXRaiseAction`
+  also never answers during the Dock's restore animation (250 ms timeout, action still lands), so that
+  one call reads `kAXErrorCannotComplete` as success. New status `GT_ERR_NO_WINDOW = 6` extends the
+  frozen enum from `action.h`.
+  **P2.6 (D26):** ScreenCaptureKit capture, downscaled at capture time, 2 s-bounded, `ImageRef` the
+  caller releases. 193/57 ms cold/warm confirms D12. Two integrator escalations landed: `gt_image_adopt`
+  added to the frozen `shim.{h,m}` so the live counter has a producer (`LiveImages()` was going to −1),
+  and `scripts/build.sh` now weak-links ScreenCaptureKit behind `-tags gotab_weak_sck` +
+  `CGO_LDFLAGS_ALLOW` so the bundle still launches on macOS 12.0–12.2.
+  **P2.3b (D27):** one `AXObserver` per regular app for the five window notifications, on a run loop the
+  shim owns; the callback is one line into Go. `cmd/gotab -watch` now rescans on events, with a 2 s
+  ticker demoted to a backstop. The catch it inherits: `NSWorkspace` launch/quit notifications are only
+  delivered by a running **main run loop**, which `cmd/gotab` has none of until Phase 3 — so an app
+  started after gotab is unseen until the backstop sweep. Grant-revoked-mid-run is untested → V6.9.
+  **Next session: Phase 3 (UI, serial) — P3.1, the panel + single-view renderer.** No P3 task has a
+  contract in `docs/tasks/` yet; write P3.1's before starting it. Phase 3 is also where `cmd/gotab`
+  finally runs a main run loop, which closes P2.3b's open half.
 
