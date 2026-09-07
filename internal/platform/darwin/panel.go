@@ -1,6 +1,11 @@
 package darwin
 
 /*
+// QuartzCore is this package's Core Animation dependency: panel.m keeps thumbnails in CALayer
+// sublayers and disables their implicit actions through CATransaction. shim.go owns the base
+// framework list; a framework only panel.m needs is declared here, the same way capture.go declares
+// ScreenCaptureKit.
+#cgo LDFLAGS: -framework QuartzCore
 #include <stdlib.h>
 #include <string.h>
 #include "panel.h"
@@ -8,6 +13,7 @@ package darwin
 import "C"
 
 import (
+	"unicode/utf8"
 	"unsafe"
 )
 
@@ -77,15 +83,22 @@ func marshalTiles(tiles []Tile) (*C.gt_tile, func()) {
 	return (*C.gt_tile)(buf), func() { C.free(buf) }
 }
 
-// putBounded copies s into a fixed C char array, truncating on a byte boundary. P3.1 may want a
-// rune-boundary truncation like shim.m's copy_cfstring; titles are full of multi-byte characters.
+// putBounded copies s into a fixed C char array, truncating on a rune boundary so a clipped title is
+// still valid UTF-8 rather than a trailing partial sequence Go's string conversion would turn into
+// U+FFFD. Same rule as shim.m's copy_cfstring: window titles are user text full of emoji, CJK and
+// combining marks, so this is the common case, not an edge case. A title long enough to hit the cap
+// is already too long for a tile.
 func putBounded(dst unsafe.Pointer, cap C.size_t, s string, outLen *C.uint16_t) {
-	b := []byte(s)
-	if C.size_t(len(b)) > cap {
-		b = b[:cap]
+	n := len(s)
+	if C.size_t(n) > cap {
+		n = int(cap)
+		for n > 0 && !utf8.RuneStart(s[n]) {
+			n--
+		}
 	}
-	if len(b) > 0 {
-		C.memcpy(dst, unsafe.Pointer(&b[0]), C.size_t(len(b)))
+	if n > 0 {
+		b := []byte(s[:n])
+		C.memcpy(dst, unsafe.Pointer(&b[0]), C.size_t(n))
 	}
-	*outLen = C.uint16_t(len(b))
+	*outLen = C.uint16_t(n)
 }
