@@ -1,0 +1,12 @@
+/* GoTab — German overlay for the permissions onboarding alert. This is the P5.1 proof
+   that AppKit override-loading works from a shipped <lang>.lproj/; it is not a
+   supported translation (see docs/tasks/P5.1.md). Key set matches en.lproj exactly.
+   Whitespace in the values (leading/trailing \n) matches en.json so the alert layout
+   is unchanged. */
+
+"perm.alert.title" = "GoTab benötigt eine Berechtigung, um Fenster zu wechseln";
+"perm.alert.needAccessibility" = "• Bedienungshilfen — um Fenster hervorzuheben und zu beobachten und den ⌥⇥-Kurzbefehl zu erkennen.\n";
+"perm.alert.needScreenRecording" = "• Bildschirmaufnahme — für Fenstervorschauen und die Titel anderer Apps.\n";
+"perm.alert.instructions" = "\nAktivieren Sie diese in den Systemeinstellungen › Datenschutz & Sicherheit. GoTab erkennt die Änderung von selbst — ein Neustart ist nicht nötig.";
+"perm.alert.openSettings" = "Systemeinstellungen öffnen";
+"perm.alert.quit" = "Beenden";
