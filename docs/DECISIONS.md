@@ -1156,3 +1156,41 @@ Smoke-tested with no grants: `gotab -switch` builds the panel, runs the loop, sc
 degrades cleanly (`OnError` prints the missing grant, empty panel), and exits 0 on SIGINT with the
 shutdown draining the prefetcher and observers before it stops the run loop. Pixels on screen are
 V6.2/V6.3.
+
+---
+
+## D33 · P3.5: the ⌥⇥ tap runs on its own thread and owns the gesture state — 2026-09-07
+
+`hotkey.{h,m,go}` install a session `CGEventTap` at `kCGHeadInsertEventTap` — the only position from
+which the switcher sees ⌥+Tab before the focused app and can swallow it — and post `Summon` / `Cycle`
+/ `Activate` / `Dismiss` into `Loop.Post`. `spike/hotkey` (P0.2/D15) is the prior art: the head
+insert, the `kCGEventTapDisabledByTimeout` re-enable (the system disables a slow tap exactly once,
+by that event; silence there is a dead hotkey), and reading `CGEventGetTimestamp` for the latency
+V6.1 will measure.
+
+- **Own thread, like `observe.m`.** `gt_hotkey_start` detaches a `gotab.hotkey` thread that owns the
+  tap, its run-loop source and a `CFRunLoopRun()` until `gt_hotkey_stop` sets `g_stopping` and calls
+  `CFRunLoopStop`. Adding the tap source to the main run loop `runloop.m` already runs was the
+  simpler option and was rejected: a keystroke is the most latency-sensitive thing in the app and
+  must not wait behind a `drawRect:` or a CA commit. Teardown is `observe.m`'s idiom — clear the
+  atomic loop pointer, stop it, wait on a semaphore.
+- **The gesture state machine lives on the tap thread**, not in Go. `g_armed` is set by the first
+  ⌥+Tab of a hold and cleared on commit/dismiss; the first Tab emits `SUMMON_*`, later ones
+  `CYCLE_*`, and Option-release emits `ACTIVATE` only if armed. So `cmd/gotab`'s `postGesture` is a
+  stateless `switch` — `SUMMON_FWD` becomes `Summon` + `Cycle(Forward)`, so a single ⌥⇥ tap lands on
+  the *next* window (the AltTab behaviour).
+- **What is swallowed:** ⌥+Tab keydown and — while armed — its keyup (so the app underneath gets no
+  orphan keyup), and Esc while armed. A `kCGEventFlagsChanged` is never swallowed (other apps track
+  Option state). Autorepeat on a held Tab (`kCGKeyboardEventAutorepeat`) is dropped — ~15×/s is too
+  fast to cycle on, and a user who wants to spin can tap.
+- **`Loop.Activate` raises** (wired in D32): `postGesture` → `Activate` → `darwin.Raise(sel.ID)` →
+  hide. Releasing Option is now a real switch.
+- **No grant → no tap.** `StartHotkey` returns `ErrNotTrusted` (an ungranted tap installs and never
+  fires — indistinguishable from broken), and `gotab -switch` falls back to `demoDriver`. That
+  fallback path is smoke-tested: clean SIGINT exit, `StopHotkey` safe when never started.
+
+**assumption → V6.1 / V6.5:** the callback latency (event → `goHotkeyGesture`) against the < 5 ms
+budget, and the first C→Go crossing on the tap thread (the runtime meeting a thread it has never
+seen), are unmeasured — a synthetic event's timestamp is not on the HID path, so P0.2's
+`spike/hotkey -manual -n 20` needs a human. The granted round trip — a real ⌥⇥ seen, swallowed,
+summon→cycle→raise — is V6.5.

@@ -1,9 +1,10 @@
 // Command gotab is the GoTab window switcher.
 //
-// Phase 3: `gotab -switch` puts the real panel on screen — enumerate, order, lay out, draw, prefetch
-// thumbnails, restyle with the system appearance — driven by the event loop with a live AppKit run
-// loop. There is no hotkey yet (P0.2 is a spike; wiring ⌥⇥ into the loop is still its own task), so
-// -switch scripts one summon so the pipeline is demonstrable. See docs/ROADMAP.md.
+// `gotab -switch` is the switcher: an ⌥⇥ event tap summons the panel, ⌥ held with ⇥ cycles the
+// selection, releasing ⌥ raises the chosen window, Esc dismisses. Behind it the event loop enumerates,
+// orders, lays out and draws, prefetches thumbnails, and restyles with the system appearance, all on a
+// live AppKit run loop. Without the Accessibility grant the tap cannot install, and -switch falls back
+// to a scripted summon so the render pipeline is still demonstrable. See docs/ROADMAP.md.
 package main
 
 import (
@@ -68,8 +69,7 @@ func main() {
 		os.Exit(runSwitcher())
 	}
 
-	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch to see the panel, -watch for the text loop, or -check.\n", version)
-	fmt.Fprintln(os.Stderr, "A hotkey to summon it on ⌥⇥ is not wired yet — see docs/ROADMAP.md.")
+	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch for the switcher, -watch for the text loop, or -check.\n", version)
 	os.Exit(1)
 }
 
@@ -296,12 +296,23 @@ func runSwitcher() int {
 
 	loopDone := make(chan error, 1)
 	go func() { loopDone <- l.Run(ctx) }()
-	go demoDriver(ctx, l)
+
+	// The real trigger: the ⌥⇥ event tap posts into the loop. gotab decides summon-vs-cycle nowhere —
+	// the tap thread already did (hotkey.h). Without the Accessibility grant the tap cannot install,
+	// and the scripted demo stands in so the render pipeline is still exercised.
+	hotkeyOK := false
+	if err := darwin.StartHotkey(func(g darwin.Gesture) { postGesture(l, g) }); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: hotkey unavailable (%v) — scripting a demo summon instead\n", err)
+		go demoDriver(ctx, l)
+	} else {
+		hotkeyOK = true
+	}
 
 	// Shutdown ordering matters: drain the prefetcher and observers while the main queue is still
 	// being serviced, hide the panel, then break the run loop.
 	go func() {
 		<-loopDone
+		darwin.StopHotkey()
 		pf.Stop()
 		darwin.StopObservers()
 		darwin.StopWatchingAppearance()
@@ -309,7 +320,11 @@ func runSwitcher() int {
 		darwin.StopRunLoop()
 	}()
 
-	fmt.Println("switcher up — panel summoned, selection cycling; ^C to stop.")
+	if hotkeyOK {
+		fmt.Println("switcher ready — hold ⌥ and press ⇥ to switch; ^C to quit.")
+	} else {
+		fmt.Println("switcher up — scripted summon, selection cycling; ^C to quit.")
+	}
 	darwin.RunLoop() // blocks on this (the main) thread until StopRunLoop
 	return 0
 }
@@ -370,10 +385,33 @@ func (r *panelRenderer) onState(m *core.Model, o *core.Order, sel core.Selection
 	r.pf.Want(reqs)
 }
 
-// demoDriver scripts the summon the missing hotkey would post: wait for the first enumeration, show
-// the panel, then step the selection forward on a slow tick so the update path is visible too. ^C
-// (ctx cancel) ends it; it deliberately never posts Activate, so running the demo does not reorder
-// the user's windows.
+// postGesture maps one tap gesture onto loop events. It runs on the hotkey tap's thread, so every
+// call here must be non-blocking: Loop.Post is (D22). The first Tab of a hold arrives as a Summon*
+// gesture and becomes Summon + Cycle — the panel opens with the *next* window already selected, which
+// is what a single ⌥⇥ tap should switch to.
+func postGesture(l *app.Loop, g darwin.Gesture) {
+	switch g {
+	case darwin.GestureSummonForward:
+		l.Post(app.Event{Kind: app.Summon})
+		l.Post(app.Event{Kind: app.Cycle, Dir: core.Forward})
+	case darwin.GestureSummonBackward:
+		l.Post(app.Event{Kind: app.Summon})
+		l.Post(app.Event{Kind: app.Cycle, Dir: core.Backward})
+	case darwin.GestureCycleForward:
+		l.Post(app.Event{Kind: app.Cycle, Dir: core.Forward})
+	case darwin.GestureCycleBackward:
+		l.Post(app.Event{Kind: app.Cycle, Dir: core.Backward})
+	case darwin.GestureActivate:
+		l.Post(app.Event{Kind: app.Activate})
+	case darwin.GestureDismiss:
+		l.Post(app.Event{Kind: app.Dismiss})
+	}
+}
+
+// demoDriver stands in for the hotkey when the Accessibility grant is missing: wait for the first
+// enumeration, show the panel, then step the selection forward on a slow tick so the update path is
+// visible too. ^C (ctx cancel) ends it; it deliberately never posts Activate, so running the demo
+// does not reorder the user's windows.
 func demoDriver(ctx context.Context, l *app.Loop) {
 	select {
 	case <-ctx.Done():

@@ -32,11 +32,11 @@ assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
 ```
 
 `internal/core` is complete (Phase 1). `internal/platform/darwin` enumerates the switchable set,
-observes window events, queries Spaces, raises / minimizes / closes windows (Phase 2, D24–D27), and
-draws the panel, prefetches thumbnails and tracks the appearance (Phase 3, D28–D32). `internal/app`
-owns the event loop — one goroutine, no mutex (P2.7 / D22). `cmd/gotab -switch` runs the whole
-pipeline on a live AppKit run loop; what it still lacks is the ⌥⇥ hotkey (P3.5), so it scripts a
-summon rather than waiting for one.
+observes window events, queries Spaces, raises / minimizes / closes windows (Phase 2, D24–D27), draws
+the panel, prefetches thumbnails, tracks the appearance, and taps the ⌥⇥ hotkey (Phase 3, D28–D33).
+`internal/app` owns the event loop — one goroutine, no mutex (P2.7 / D22). `cmd/gotab -switch` is the
+switcher, end to end, on a live AppKit run loop. Nothing has run it on a real screen yet — an agent
+host has no window server — so the pixels and the granted hotkey round trip are Phase 6's (V6.1–V6.5).
 
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
@@ -118,8 +118,8 @@ where the 100 ms summon budget goes: on data, not on pixels, and not on capture,
 the summon path at all.
 
 Phases 2 and 3 both began "serial" and both fanned out once their shared surface was frozen — the C
-shim for Phase 2 (`7e7751e`), `panel.h` for Phase 3. Phase 2 is closed (D24–D27). Phase 3's four
-render tasks are done and wired (D28–D32): `gotab -switch` enumerates → orders → lays out → draws →
-prefetches → restyles on a live run loop. **What remains in Phase 3 is P3.5 (the hotkey) and the
-on-screen verification (V6.2/V6.3)** — an agent host has no window server, so pixels have only been
-checked by in-process offscreen render. See [ROADMAP.md](ROADMAP.md).
+shim for Phase 2 (`7e7751e`), `panel.h` for Phase 3. Both are closed: Phase 2 in D24–D27, Phase 3 in
+D28–D33. `gotab -switch` is the switcher — ⌥⇥ tap → enumerate → order → lay out → draw → prefetch →
+restyle → raise, on a live run loop. **The only Phase 3 debt is on-screen verification** (V6.1–V6.5):
+an agent host has no window server, so the pixels and the granted hotkey round trip are unseen, and a
+bad result there sends work back into Phase 3. Next is Phase 4 (Product). See [ROADMAP.md](ROADMAP.md).
