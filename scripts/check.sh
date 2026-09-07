@@ -20,6 +20,11 @@ step "gofmt"   bash -c '
   dirs=$(go list -f "{{.Dir}}" ./... 2>/dev/null)
   [ -z "$(gofmt -l $dirs 2>/dev/null)" ] || { gofmt -l $dirs; false; }'
 step "go vet"  go vet ./...
+# `go vet` and `go test` compile but do not LINK an executable, so a missing `-framework` in a #cgo
+# LDFLAGS line slips both -- P3.3 and P3.4 each hit this with QuartzCore. `go build ./...` links
+# cmd/gotab and every spike, which is what catches it. It does not build the universal .app (that is
+# V6.7); it just makes "the binary links" a gate condition.
+step "go build" go build ./...
 step "tests"   go test ./...
 
 # The architectural invariant that matters most: core must never reach for the platform.
