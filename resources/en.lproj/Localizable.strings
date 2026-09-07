@@ -1,0 +1,11 @@
+/* GoTab — permissions onboarding alert (internal/platform/darwin/permissions.m).
+   Keys and English wording mirror internal/i18n/en.json's perm.alert.* set; the two
+   catalogs are kept in step by hand (D40). AppKit resolves this table from
+   Contents/Resources/en.lproj/ in the built .app. */
+
+"perm.alert.title" = "GoTab needs permission to switch windows";
+"perm.alert.needAccessibility" = "• Accessibility — to raise and observe windows, and to see the ⌥⇥ shortcut.\n";
+"perm.alert.needScreenRecording" = "• Screen Recording — for window thumbnails and the titles of other apps.\n";
+"perm.alert.instructions" = "\nTurn these on in System Settings › Privacy & Security. GoTab notices the change on its own — there is no need to relaunch it.";
+"perm.alert.openSettings" = "Open System Settings";
+"perm.alert.quit" = "Quit";
