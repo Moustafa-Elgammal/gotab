@@ -112,13 +112,16 @@ static void add_check(NSView *v, CGFloat *y, NSString *key, NSString *title) {
     *y -= ROW - 4;
 }
 
-static void add_text(NSView *v, CGFloat *y, NSString *key) {
+static void add_text(NSView *v, CGFloat *y, NSString *key, NSString *axLabel) {
     NSTextField *t = [NSTextField textFieldWithString:@""]; // autoreleased
     t.identifier = key;
     t.frame = NSMakeRect(PAD + 8, *y, WIN_W - 2 * PAD - 8, 22);
     t.target = g_ctl;
     t.action = @selector(text:);
     [[t cell] setSendsActionOnEndEditing:YES]; // fire on focus-loss, not just Return
+    // The field's caption is a separate, unlinked label, so VoiceOver would announce it as an
+    // unlabelled text field without this (P5.2).
+    [t setAccessibilityLabel:axLabel];
     [v addSubview:t];
     g_ctrls[key] = t;
     *y -= ROW;
@@ -132,6 +135,7 @@ static void add_popup(NSView *v, CGFloat *y, NSString *key, NSString *caption, N
     p.identifier = key;
     p.target = g_ctl;
     p.action = @selector(popup:);
+    [p setAccessibilityLabel:caption]; // the caption label is not AX-linked to the control (P5.2)
     [v addSubview:p];
     g_ctrls[key] = p;
     [p release];
@@ -151,6 +155,9 @@ static void add_stepper(NSView *v, CGFloat *y, NSString *key, NSString *caption,
     s.identifier = key;
     s.target = g_ctl;
     s.action = @selector(step:);
+    // A bare NSStepper speaks only "stepper"; the caption and the value echo are separate labels
+    // (P5.2). The current value still reaches VoiceOver through the stepper's own integerValue.
+    [s setAccessibilityLabel:caption];
     [v addSubview:s];
     g_ctrls[key] = s;
     g_ctrls[[key stringByAppendingString:@"#echo"]] = echo;
@@ -164,6 +171,9 @@ static void add_recorder(NSView *v, CGFloat *y, NSString *caption) {
     r.bezelStyle = NSBezelStyleRounded;
     [r setButtonType:NSButtonTypeMomentaryPushIn];
     [r setTitle:@"—"];
+    // The title is the chord ("⌥⇥") or a placeholder, not a name; give VoiceOver a stable label and
+    // let the title ride as the value (P5.2).
+    [r setAccessibilityLabel:@"Keyboard shortcut"];
     [v addSubview:r];
     g_ctrls[@"__hotkey"] = r;
     [r release];
@@ -213,7 +223,7 @@ gt_status gt_settings_open(void) {
         add_section(c, &y, @"Never show these apps");
         [c addSubview:make_label(@"comma-separated application names", NSMakeRect(PAD + 8, y + 2, 380, 16))];
         y -= 20;
-        add_text(c, &y, @"BlockedApps");
+        add_text(c, &y, @"BlockedApps", @"Never show these apps, comma-separated application names");
         y -= 6;
 
         add_section(c, &y, @"Appearance");

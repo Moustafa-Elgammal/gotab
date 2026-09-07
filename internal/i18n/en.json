@@ -1,0 +1,21 @@
+{
+  "perm.alert.title": "GoTab needs permission to switch windows",
+  "perm.alert.needAccessibility": "• Accessibility — to raise and observe windows, and to see the ⌥⇥ shortcut.\n",
+  "perm.alert.needScreenRecording": "• Screen Recording — for window thumbnails and the titles of other apps.\n",
+  "perm.alert.instructions": "\nTurn these on in System Settings › Privacy & Security. GoTab notices the change on its own — there is no need to relaunch it.",
+  "perm.alert.openSettings": "Open System Settings",
+  "perm.alert.quit": "Quit",
+
+  "perm.cli.grantPrompt": "gotab: grant the missing permission in System Settings › Privacy & Security:",
+  "perm.cli.accessibilityLabel": "Accessibility",
+  "perm.cli.screenRecordingLabel": "Screen Recording",
+  "perm.cli.screenRecordingOff": "gotab: Screen Recording is off — no thumbnails, and no titles for other apps.",
+  "perm.cli.waitingAccessibility": "gotab: waiting for Accessibility — grant it in System Settings; ^C to stop.",
+  "perm.cli.accessibilityGranted": "gotab: Accessibility granted — starting.",
+  "perm.cli.accessibilityStillMissing": "gotab: Accessibility still not granted — quitting. Re-open GoTab after granting it.",
+
+  "update.devBuild": "gotab %s: development build — skipping the update check.",
+  "update.upToDate": "gotab %s: up to date.",
+  "update.available": "gotab: %s is available (you have %s) — %s",
+  "update.checkFailed": "gotab: update check failed: %v"
+}

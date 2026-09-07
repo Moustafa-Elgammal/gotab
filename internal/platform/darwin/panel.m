@@ -28,6 +28,15 @@ static NSMutableArray<CALayer *> *g_tile_layers = nil;
 static gt_palette g_palette;
 static int g_have_palette = 0;
 
+// VoiceOver (P5.2). GTTileView draws every tile itself, so there is no per-tile NSView for AppKit to
+// hand a screen reader: the content view is an accessibility container and each tile is a synthetic
+// element in g_a11y_children, kept in step with g_tiles by a11y_sync(). g_a11y_last_* debounce the
+// spoken announcement so a cycle speaks the new selection once and a redraw that changed nothing is
+// silent; gt_panel_hide resets them so the next summon always speaks its initial selection.
+static NSMutableArray *g_a11y_children = nil;
+static int32_t g_a11y_last_selected = -1;
+static int32_t g_a11y_last_n = -1;
+
 // GT_MATERIAL_NONE until P3.4 sets one. Stored so a palette-only redraw keeps it.
 static int32_t g_material = GT_MATERIAL_NONE;
 
@@ -98,6 +107,66 @@ static NSRect tile_image_rect(NSRect tile) {
 }
 
 // ---------------------------------------------------------------------------
+// One synthetic accessibility element per tile (P5.2). NSAccessibilityElement already does the
+// flipped-parent coordinate conversion for accessibilityFrameInParentSpace, which is why the tiles
+// can be reported in the same top-left frame drawRect: uses. Role is "button" because activating a
+// tile means "switch to this window" -- though the press itself travels the ordinary path (release
+// the modifier), since panel.h exposes no Go callback to raise a window from here; accessibility
+// PerformPress is a deliberate no-op. Compiled without ARC: elements are owned by g_a11y_children.
+@interface GTTileElement : NSAccessibilityElement {
+@public
+    BOOL tileSelected;
+}
+@end
+
+@implementation GTTileElement
+- (NSAccessibilityRole)accessibilityRole {
+    return NSAccessibilityButtonRole;
+}
+- (BOOL)isAccessibilitySelected {
+    return tileSelected;
+}
+- (BOOL)accessibilityPerformPress {
+    return NO;
+}
+@end
+
+// The label a screen reader speaks for a tile: "<title>, <app>", or just the app when the window has
+// no title, or a last-resort constant so an element is never silent.
+static NSString *a11y_label(const gt_tile *t) {
+    NSString *title = tile_string(t->title, t->title_len);
+    NSString *app = tile_string(t->subtitle, t->subtitle_len);
+    if (title.length == 0) return app.length ? app : @"Untitled window";
+    if (app.length == 0) return title;
+    return [NSString stringWithFormat:@"%@, %@", title, app];
+}
+
+// Bring g_a11y_children to exactly g_ntiles elements and refresh each one's label, frame and selected
+// state from g_tiles. Grows and shrinks at the tail like g_tile_layers; a shrink releases the tail
+// elements through the array. Must run on the main thread (panel.h THREADING) and after store_tiles.
+static void a11y_sync(void) {
+    if (!g_content) return;
+    if (!g_a11y_children) g_a11y_children = [[NSMutableArray alloc] init];
+
+    while ((int32_t)g_a11y_children.count > g_ntiles) {
+        [g_a11y_children removeLastObject];
+    }
+    while ((int32_t)g_a11y_children.count < g_ntiles) {
+        GTTileElement *e = [[GTTileElement alloc] init];
+        [e setAccessibilityParent:g_content];
+        [g_a11y_children addObject:e];
+        [e release];
+    }
+    for (int32_t i = 0; i < g_ntiles; i++) {
+        GTTileElement *e = g_a11y_children[i];
+        const gt_tile *t = &g_tiles[i];
+        [e setAccessibilityLabel:a11y_label(t)];
+        [e setAccessibilityFrameInParentSpace:NSMakeRect(t->x, t->y, t->w, t->h)];
+        e->tileSelected = (t->selected != 0);
+    }
+}
+
+// ---------------------------------------------------------------------------
 // The one view that draws every tile. AltTab has 53 NSView subclasses and pays a C->Go callback per
 // tile; this draws them all in drawRect: and keeps thumbnails in dumb CALayers that never call back.
 // ---------------------------------------------------------------------------
@@ -109,6 +178,27 @@ static NSRect tile_image_rect(NSRect tile) {
 
 - (BOOL)isFlipped {
     return YES;
+}
+
+// --- Accessibility (P5.2). The view paints the tiles, so it stands in as their container. ---
+- (BOOL)isAccessibilityElement {
+    return NO;
+}
+- (NSAccessibilityRole)accessibilityRole {
+    return NSAccessibilityGroupRole;
+}
+- (NSString *)accessibilityLabel {
+    return @"Window switcher";
+}
+- (NSArray *)accessibilityChildren {
+    return g_a11y_children ? [[g_a11y_children copy] autorelease] : @[];
+}
+- (NSArray *)accessibilitySelectedChildren {
+    NSMutableArray *sel = [NSMutableArray array];
+    for (GTTileElement *e in g_a11y_children) {
+        if (e->tileSelected) [sel addObject:e];
+    }
+    return sel;
 }
 
 - (void)drawPlaceholderInRect:(NSRect)r palette:(gt_palette)pal {
@@ -354,6 +444,33 @@ static gt_status panel_populate(const gt_tile *tiles, int32_t n) {
 
     [CATransaction commit];
 
+    // Accessibility (P5.2): keep the synthetic tile elements in step, and speak the selection. A
+    // changed tile count is a layout change; a moved selection (or the first frame of a summon, which
+    // gt_panel_hide armed by resetting the trackers to -1) is spoken once at high priority so a
+    // VoiceOver user hears each ⌥⇥ cycle. All of this is inert when VoiceOver is not running.
+    @autoreleasepool {
+        int32_t sel = -1;
+        for (int32_t i = 0; g_tiles && i < g_ntiles; i++) {
+            if (g_tiles[i].selected) { sel = i; break; }
+        }
+        a11y_sync();
+
+        BOOL setChanged = (g_ntiles != g_a11y_last_n);
+        if (setChanged) {
+            NSAccessibilityPostNotification(g_content, NSAccessibilityLayoutChangedNotification);
+        }
+        if (sel >= 0 && (sel != g_a11y_last_selected || setChanged)) {
+            NSAccessibilityPostNotificationWithUserInfo(
+                g_content, NSAccessibilityAnnouncementRequestedNotification,
+                @{NSAccessibilityAnnouncementKey : a11y_label(&g_tiles[sel]),
+                  NSAccessibilityPriorityKey : @(NSAccessibilityPriorityHigh)});
+            NSAccessibilityPostNotification(g_content,
+                                            NSAccessibilitySelectedChildrenChangedNotification);
+        }
+        g_a11y_last_selected = sel;
+        g_a11y_last_n = g_ntiles;
+    }
+
     [g_content setNeedsDisplay:YES];
     return GT_OK;
 }
@@ -407,6 +524,10 @@ gt_status gt_panel_update(const gt_tile *tiles, int32_t n) {
 
 void gt_panel_hide(void) {
     [g_panel orderOut:nil];
+    // Re-arm the announcement: the next summon must speak its initial selection even if the panel
+    // comes back with the same tile count and selection index as last time (P5.2).
+    g_a11y_last_selected = -1;
+    g_a11y_last_n = -1;
 }
 
 int32_t gt_panel_visible(void) {

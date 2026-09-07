@@ -4,6 +4,12 @@
 // grant there. The caller polls gt_trusted()/gt_can_record() afterwards and proceeds the moment the
 // grant appears — no relaunch. macOS itself relaunches some apps on an Accessibility grant; if it
 // does, the fresh process just passes the check and never shows this.
+//
+// User-facing text is resolved with NSLocalizedString from Contents/Resources/<lang>.lproj/
+// Localizable.strings (P5.1). The keys mirror internal/i18n/en.json's perm.alert.* set; outside a
+// bundle (tests, `go run`) NSLocalizedString returns the key, which this modal never exercises —
+// the CLI fallback path uses the Go i18n.T strings instead. NSLocalizedString hands back an
+// autoreleased NSString, drained by the enclosing @autoreleasepool.
 #import <Cocoa/Cocoa.h>
 #import <CoreGraphics/CoreGraphics.h>
 #include <string.h>
@@ -40,20 +46,20 @@ gt_status gt_permissions_prompt(int32_t need_ax, int32_t need_sr) {
         }
 
         NSAlert *a = [[NSAlert alloc] init];
-        a.messageText = @"GoTab needs permission to switch windows";
+        a.messageText = NSLocalizedString(@"perm.alert.title", nil);
 
         NSMutableString *info = [NSMutableString string];
         if (need_ax) {
-            [info appendString:@"• Accessibility — to raise and observe windows, and to see the ⌥⇥ shortcut.\n"];
+            [info appendString:NSLocalizedString(@"perm.alert.needAccessibility", nil)];
         }
         if (need_sr) {
-            [info appendString:@"• Screen Recording — for window thumbnails and the titles of other apps.\n"];
+            [info appendString:NSLocalizedString(@"perm.alert.needScreenRecording", nil)];
         }
-        [info appendString:@"\nTurn these on in System Settings › Privacy & Security. GoTab notices the change on its own — there is no need to relaunch it."];
+        [info appendString:NSLocalizedString(@"perm.alert.instructions", nil)];
         a.informativeText = info;
 
-        [a addButtonWithTitle:@"Open System Settings"];
-        [a addButtonWithTitle:@"Quit"];
+        [a addButtonWithTitle:NSLocalizedString(@"perm.alert.openSettings", nil)];
+        [a addButtonWithTitle:NSLocalizedString(@"perm.alert.quit", nil)];
 
         [NSApp activateIgnoringOtherApps:YES];
         NSModalResponse r = [a runModal];

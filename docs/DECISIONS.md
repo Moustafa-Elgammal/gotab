@@ -1369,3 +1369,93 @@ still → **V6.2**.
 **V6.7** is now purely the machine half: a first launch from `/Applications` on a genuinely clean
 account, and on a real macOS 12 host (the `minos`/plist check proves they *agree*, not that a 12.0
 binary *runs* — D17). No icon yet (`CFBundleIconFile` absent); that needs artwork and is Phase 5.
+
+---
+
+## D39 · P5.3: the updater is a plain version check, not Sparkle — 2026-09-07
+
+The roadmap left P5.3 as "decide: Sparkle via cgo, or plain download". **Decided: a plain check.**
+`internal/update` is pure Go, standard library only — `Check(ctx, current)` does an HTTPS GET of a
+small JSON manifest, compares versions, and returns whether a newer build exists and its URL. It does
+not download, verify, or relaunch anything. `gotab -check-update` is the entry point; a launch-time
+check is a later, optional addition.
+
+Why not Sparkle:
+
+- **The bundle is ad-hoc signed (D38).** Sparkle's value is in-place download-and-relaunch, and that
+  story only holds with a Developer ID signature + notarization — a `spctl`-rejected ad-hoc app that
+  replaces itself is not something to ship. Until notarization exists (V6.7's machine half), Sparkle
+  would be infrastructure with nothing to stand on.
+- **Clean break.** The project inherits nothing from AltTab — no Keychain, no preference migration,
+  no Sparkle continuity (D6, ARCHITECTURE.md). AltTab vendors Sparkle, AppCenter and ShortcutRecorder
+  (ALTTAB-LESSONS.md); GoTab vendors nothing and this keeps it that way.
+- **cgo cost and surface.** Sparkle is an Objective-C framework — another weak link, another
+  `SUPublicEDKey` in the plist, an EdDSA signing step in `build.sh`, an appcast host. A `net/http`
+  GET and a 30-line semver compare is the whole of the alternative.
+
+**assumption → V6.11:** `FeedURL` (`https://gotab.app/appcast/latest.json`) has no host and the check
+has only run against a local file. Downloading + verifying + relaunching a new build is explicitly
+out of scope — it is a separate task gated on notarization, not a V6 row.
+
+---
+
+## D40 · P5.1: the i18n scaffold — one .lproj dir, two file formats, and a locale punt — 2026-09-07
+
+`internal/i18n` is pure Go (embedded `en.json` as the single source of truth for the key set; a
+non-English locale is a partial overlay merged over it, swapped through an `atomic.Pointer` so `T`
+reads lock-free after a startup `SetLocale`/`Load`).
+
+Three shape decisions worth recording:
+
+- **Two file formats per locale, by necessity.** GoTab's user-facing strings live in two runtimes.
+  Go code calls `i18n.T` and reads `<locale>.lproj/gotab.json`. Objective-C in
+  `internal/platform/darwin` calls `NSLocalizedString`, which AppKit resolves from
+  `<locale>.lproj/Localizable.strings` in the bundle — that path is not ours to change. So each
+  locale is one `.lproj` directory holding both files, kept in step by hand. A single format would
+  mean either teaching Go to parse `.strings` or stopping AppKit from doing the lookup it does for
+  free; both cost more than mirroring a dozen keys.
+- **Locale selection is `GOTAB_LOCALE` → `LANG`, for now.** The correct source is
+  `CFLocaleCopyPreferredLanguages` / `AppleLanguages`, which is cgo — and `internal/i18n` is
+  deliberately cgo-free so it stays in the pure layer with `core` and `prefs`. A
+  `darwin.PreferredLanguages()` feeding `cmd/gotab`'s `initLocale()` is the follow-up; the env vars
+  cover development and the `de` proof in the meantime.
+- **Scaffold, not a sweep.** Only the permissions onboarding strings (the NSAlert and the CLI
+  prompt/wait lines) are routed through `i18n` in this pass, with a `de` overlay that exists to
+  exercise the loader rather than to ship German. The CLI usage text, the settings window and the
+  panel are a later migration — doing them now would have collided with P5.2 (`settings.m`,
+  `panel.m`) and bought nothing the scaffold does not already prove.
+
+---
+
+## D41 · P5.2: the panel speaks to VoiceOver from one container, and press stays on the old path — 2026-09-07
+
+P5.2 asked for a screen-reader-usable switcher. `panel.m` draws every tile into one `GTTileView`, so
+there is no per-tile `NSView` for AppKit to expose. The shape that fell out:
+
+- **The drawing view is the accessibility container.** `GTTileView` answers `isAccessibilityElement`
+  NO, `accessibilityRole` group, `accessibilityLabel` "Window switcher", and hands back one
+  synthetic child per tile from a file-static array kept in step with `g_tiles` by `a11y_sync()` —
+  the same grow/shrink-at-the-tail discipline as `g_tile_layers`.
+- **`NSAccessibilityElement`, for the flipped-frame conversion.** Each child is a
+  `GTTileElement : NSAccessibilityElement` (button role, `"<title>, <app>"` label, `selected` bit).
+  `accessibilityFrameInParentSpace` is set to the tile's own top-left `x/y/w/h` — the class does the
+  flipped-parent math, so what is spoken and what is drawn cannot drift.
+- **The announcement is debounced and re-armed.** `panel_populate` (shared by show and update) posts
+  `NSAccessibilityAnnouncementRequestedNotification` at High priority plus a selection notification
+  when the selected index moves, and `NSAccessibilityLayoutChangedNotification` when the count
+  changes. `g_a11y_last_selected` / `g_a11y_last_n` keep a no-op redraw (a thumbnail arriving, a
+  palette flip) silent; `gt_panel_hide` resets them to `-1` so every summon speaks its first
+  selection even when it matches the last one.
+- **Press is a deliberate no-op.** `panel.h` is frozen and exposes no callback to raise a window
+  from `panel.m`. `GTTileElement.accessibilityPerformPress` returns NO; a VoiceOver user activates
+  the way a sighted user does — release the modifier, and the hotkey tap drives `Loop.Activate` →
+  `darwin.Raise`. Wiring press-to-raise would need a new exported function; it is a follow-up, not an
+  escalation, because the cycle-and-release flow is already usable without sight.
+- **Settings: labels only where a control renders no text.** `setAccessibilityLabel:` on the two
+  steppers, the Appearance popup, the blocked-apps field and the hotkey recorder. The filter
+  checkboxes already speak their titles and were left alone.
+
+**assumption → V6.10:** none of this has been *heard*. An agent host has no screen reader — the same
+wall P3.1's screenshot (V6.2/V6.3) and V6.1's keypress hit. A human runs VoiceOver against
+`gotab -switch` and `gotab -settings` and confirms each tile is announced with title + app, the
+selection is spoken on every ⌥⇥ cycle, and every settings control has a spoken label.

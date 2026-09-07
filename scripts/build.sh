@@ -70,6 +70,14 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
     <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>LSMinimumSystemVersion</key>    <string>${MIN_MACOS}</string>
+    <!-- Localization (P5.1): the base language, and the set that ships. AppKit reads
+         Contents/Resources/<lang>.lproj/Localizable.strings; the Go side reads the
+         sibling gotab.json. AllowMixedLocalizations lets an untranslated key fall
+         back to the base rather than blank. -->
+    <key>CFBundleDevelopmentRegion</key><string>en</string>
+    <key>CFBundleAllowMixedLocalizations</key><true/>
+    <key>CFBundleLocalizations</key>
+    <array><string>en</string><string>de</string></array>
     <!-- Agent app: no Dock tile, no menu bar. The panel runs as Accessory and the settings window
          promotes to Regular at runtime (P4.2). -->
     <key>LSUIElement</key>               <true/>
@@ -81,6 +89,15 @@ PLIST
 # A malformed plist is a bundle that will not launch, and a stray metacharacter in VERSION would do
 # it silently. Cheap to catch here.
 plutil -lint "$OUT/Contents/Info.plist" >/dev/null
+
+# Bundle resources. resources/<lang>.lproj/ carry the ObjC .strings and the Go gotab.json for each
+# locale (P5.1); resources/appcast/ carries the example release manifest (P5.3). The Go side also
+# embeds en.json, so an absent resources/ tree is not fatal here -- English still works. Explicit
+# `if` rather than `[ -e ] && cp` so an unmatched glob is a skip, not a `set -e` abort.
+echo "    bundling resources"
+for extra in resources/*.lproj resources/appcast; do
+  if [ -e "$extra" ]; then cp -R "$extra" "$OUT/Contents/Resources/"; fi
+done
 
 # The plist claims MIN_MACOS; this proves the binary agrees, per slice. A mismatch is silent at build
 # time and fatal at launch on the user's machine, which is the worst place to find it -- and it is a

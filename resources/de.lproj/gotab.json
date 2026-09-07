@@ -1,0 +1,21 @@
+{
+  "perm.alert.title": "GoTab benötigt eine Berechtigung, um Fenster zu wechseln",
+  "perm.alert.needAccessibility": "• Bedienungshilfen — um Fenster hervorzuheben und zu beobachten und den ⌥⇥-Kurzbefehl zu erkennen.\n",
+  "perm.alert.needScreenRecording": "• Bildschirmaufnahme — für Fenstervorschauen und die Titel anderer Apps.\n",
+  "perm.alert.instructions": "\nAktivieren Sie diese in den Systemeinstellungen › Datenschutz & Sicherheit. GoTab erkennt die Änderung von selbst — ein Neustart ist nicht nötig.",
+  "perm.alert.openSettings": "Systemeinstellungen öffnen",
+  "perm.alert.quit": "Beenden",
+
+  "perm.cli.grantPrompt": "gotab: Erteilen Sie die fehlende Berechtigung in den Systemeinstellungen › Datenschutz & Sicherheit:",
+  "perm.cli.accessibilityLabel": "Bedienungshilfen",
+  "perm.cli.screenRecordingLabel": "Bildschirmaufnahme",
+  "perm.cli.screenRecordingOff": "gotab: Bildschirmaufnahme ist deaktiviert — keine Vorschauen und keine Titel für andere Apps.",
+  "perm.cli.waitingAccessibility": "gotab: warte auf Bedienungshilfen — erteilen Sie die Berechtigung in den Systemeinstellungen; ^C zum Abbrechen.",
+  "perm.cli.accessibilityGranted": "gotab: Bedienungshilfen erteilt — starte.",
+  "perm.cli.accessibilityStillMissing": "gotab: Bedienungshilfen weiterhin nicht erteilt — beende. Öffnen Sie GoTab erneut, nachdem Sie die Berechtigung erteilt haben.",
+
+  "update.devBuild": "gotab %s: Entwicklungs-Build — Update-Prüfung wird übersprungen.",
+  "update.upToDate": "gotab %s: aktuell.",
+  "update.available": "gotab: %s ist verfügbar (Sie haben %s) — %s",
+  "update.checkFailed": "gotab: Update-Prüfung fehlgeschlagen: %v"
+}
