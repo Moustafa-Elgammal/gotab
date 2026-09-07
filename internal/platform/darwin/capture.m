@@ -238,14 +238,11 @@ gt_status gt_capture(uint32_t window_id, int32_t max_w, int32_t timeout_ms, gt_i
         ctx->image = NULL;  // ownership moves to the caller before the context can free it
         ctx_release(ctx);
 
-        // ESCALATION, recorded in docs/tasks/P2.6.md: the live count that gt_image_live() reports is
-        // shim.m's `static atomic_llong g_images_live`, and it has no increment side -- the only
-        // function that touches it, gt_image_release, decrements. A handle produced here is
-        // therefore never counted, so the count reads 0 while an image is held and -1 after it is
-        // released. Fixing it means adding one producer-side function to shim.h/shim.m, which P2.6
-        // owns neither of. This line is where that call goes:
-        //     *out_img = gt_image_adopt(img);
-        *out_img = (gt_image_ref)img;
+        // Adopt rather than cast: gt_image_adopt is what makes the handle countable, and P2.6's
+        // escalation is why it exists at all (shim.h). The CGImage is already retained here, which
+        // is the precondition adopt states -- ctx->image was cleared above so the context cannot
+        // also free it.
+        *out_img = gt_image_adopt(img);
         return GT_OK;
     }
 }

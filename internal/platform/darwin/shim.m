@@ -47,6 +47,12 @@ int32_t gt_can_record(void) {
     return CGPreflightScreenCaptureAccess() ? 1 : 0;
 }
 
+gt_image_ref gt_image_adopt(void *retained_cgimage) {
+    if (!retained_cgimage) return NULL;
+    atomic_fetch_add_explicit(&g_images_live, 1, memory_order_relaxed);
+    return (gt_image_ref)retained_cgimage;
+}
+
 void gt_image_release(gt_image_ref img) {
     if (!img) return;
     CGImageRelease((CGImageRef)img);

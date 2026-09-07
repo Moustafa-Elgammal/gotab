@@ -38,9 +38,21 @@ int32_t gt_can_record(void);  // Screen Recording
 // ---------------------------------------------------------------------------
 
 // An opaque bitmap. Go never sees a CGImageRef it might mistake for memory the runtime understands;
-// it sees this. Nothing produces one until P2.6 — the ownership rule is established here so that the
-// task which finally allocates megabytes is not also the task inventing how they are freed.
+// it sees this. The ownership rule was established here before anything produced one, so that the
+// task which finally allocates megabytes was not also the task inventing how they are freed. P2.6 is
+// now that producer.
 typedef struct gt_image *gt_image_ref;
+
+// Takes ownership of a retained CGImageRef and returns it as an opaque handle, counting it live.
+//
+// This is the producer side of the count below, and it was missing until P2.6 went looking for it:
+// gt_image_release was the only function that touched the counter, and it decrements. Every handle
+// was therefore born uncounted, so gt_image_live() read 0 while images were held and went NEGATIVE
+// after they were freed — measured at -181 over a soak. A counter that only counts down is worse
+// than no counter, because V6.4's leak assertion would have been written against it and passed.
+//
+// The argument must already be retained: this adopts a reference, it does not take one.
+gt_image_ref gt_image_adopt(void *retained_cgimage);
 
 // Releases a bitmap. Safe on NULL, and NOT safe twice: the second call is a use-after-free, which is
 // exactly why Go's wrapper clears its pointer rather than trusting the caller.
