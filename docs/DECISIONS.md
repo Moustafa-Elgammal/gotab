@@ -507,3 +507,494 @@ in someone's head is what makes the rework expensive.
 writing no *new* per-task tests, never deleting the suite that exists or letting the gate go red. The
 rule against reporting a gate as passing on a number you don't believe is untouched, and P0.2 is the
 first thing it is applied to under this policy: it stays `[~]`.
+
+---
+
+## D17 · cgo moves the deployment target, and D2's macOS 11 floor is now 12 — 2026-09-06
+
+Two corrections, found by P2.1 the first time an Objective-C file existed in a non-spike package. Both
+were invisible until then, and one of them shipped a `.app` that could not launch on the OS it claimed.
+
+**Measured on this host (macOS 26.6.2, Go 1.26, SDK 26.0), same trivial `main`:**
+
+| build | `minos` |
+|---|---|
+| pure Go, no cgo | 12.0 |
+| cgo enabled, no C compiled | 12.0 |
+| **cgo with a real `.m` file** | **26.0** |
+| cgo with a real `.m` file, `MACOSX_DEPLOYMENT_TARGET=12.0` | 12.0 |
+
+**Correction 1 — D2 is stale.** D2 recorded that Go's linker forces `minos 11.0`. On Go 1.26 it forces
+**12.0**. Nothing in the project's own code moved it; the toolchain's floor rose underneath a number that
+was written down once and then treated as permanent. README, `ARCHITECTURE.md`, `install.sh`'s guard and
+`Info.plist` all said 11 and are now 12. D2 stands as what was true when it was measured; this supersedes
+it. The `spike/sck` reasoning survives unchanged — SCK arrives in 12.3, still above the floor, so it must
+still be weak-linked.
+
+**Correction 2, and the one that matters — once real Objective-C is compiled, clang decides the
+deployment target, not the Go linker,** and clang's default is the SDK's own version. The `.app` this
+produced declared `LSMinimumSystemVersion 11.0` in its plist and carried `minos 26.0` in its load
+commands. Nothing warns about that. It builds, it signs, it runs perfectly on the machine that built it,
+and it refuses to launch on anything older than macOS 26 — a failure that only ever appears on someone
+else's computer.
+
+**Fix, in `scripts/build.sh`:** one `MIN_MACOS` variable feeds both `MACOSX_DEPLOYMENT_TARGET` and the
+plist, so the two cannot drift, and the build **fails** if any slice's `minos` disagrees with the plist:
+
+    verifying deployment target
+      x86_64: minos 12.0
+      arm64: minos 12.0
+
+The check is the actual deliverable. This regression is one line away at all times — a new
+`-framework`, an Xcode update, a CI runner image bump — and the whole reason it cost anything is that it
+is silent. A build that fails loudly on the developer's machine is worth more than the correct value
+committed once.
+
+**What is still unverified:** that a 12.0-targeted binary actually *runs* on macOS 12. Nothing here has a
+macOS 12 machine, and per D16 that is V6.7's to establish. The claim being made today is narrower and is
+the one that was wrong before: the binary and its plist now agree.
+
+**Incidental:** the ~14 `ld: warning: object file was built for newer 'macOS' version` warnings that
+appear when lowering the target are stale build-cache artifacts, not a real conflict. They vanish on a
+clean `go build` and are not worth suppressing — suppressing them would hide the real version conflict
+they exist to report.
+
+---
+
+## D18 · `cmd/gotab` was never in the repository — 2026-09-06
+
+Found while committing P2.1, because `git status` did not list a file that had just been rewritten.
+
+`.gitignore` carried an unanchored `gotab`, intended for the binary `go build ./cmd/gotab` drops in the
+repo root. A gitignore pattern without a slash matches **any path component** with that name, at any
+depth, directories included. So it matched `cmd/gotab/` — the project's only `package main`, which has
+therefore never been committed.
+
+**A fresh clone had no `cmd/` directory at all**, and `scripts/build.sh` failed on it:
+
+    ==> Building GoTab 0b260c4
+        compiling arm64
+    stat /tmp/.../cmd/gotab: directory not found
+
+`.github/workflows/ci.yml` runs `check.sh` then `build.sh`, so CI has been failing on every commit this
+repository has ever had. Nothing surfaced it, because nothing here reads CI.
+
+**Why it hid so well.** Every local check passes: the file is on disk, `go build ./...` and
+`scripts/check.sh` are green, `./scripts/build.sh` produces a working `.app`. `go build ./...` is green
+in the *clone* too, since a package that does not exist cannot fail to compile. The only signal was the
+absence of a line in `git status` — and an earlier session read the same symptom as "a broken build
+(`cmd/gotab` was empty)" and fixed the contents rather than the tracking.
+
+**Fix:** anchor both patterns — `/gotab` and `/spike/spike` — and commit the package. The anchoring is
+the point: an unanchored name in `.gitignore` is a claim about every directory in the tree, and this repo
+has a `spike/` directory whose subdirectories are named after what they probe.
+
+**What this says about the gate.** `scripts/check.sh` is thorough about the things it was pointed at —
+formatting, vet, tests, the `core` purity invariant — and structurally could not see this, because it
+runs against the working tree rather than against what the working tree would produce. That is a gap in
+what "green" means, not an argument for a bigger checklist. **V6.7 already builds from a clean state and
+is where this belongs**; it now has a concrete failure it must catch, rather than a hypothetical one.
+
+---
+
+## D19 · CGWindowList over-reports switchable windows by ~8x — 2026-09-06
+
+P2.2's first real run, on an ordinary session with Screen Recording granted:
+
+| | count |
+|---|---|
+| `CGWindowListCopyWindowInfo`, `kCGWindowListOptionAll` | 86 |
+| with `ExcludeDesktopElements`, all layers | 82 |
+| after dropping `kCGWindowLayer != 0` | **59** |
+| of those, carrying a `kCGWindowName` | **7** |
+| of those, `kCGWindowIsOnscreen` | 5 |
+
+Counts are one snapshot of one session and drift by a few as windows open and close; the ratio is the
+finding, not the digits. `ExcludeDesktopElements` earns almost nothing on its own (86 → 82) — the layer
+filter is what does the work.
+
+The seven titled windows were exactly the seven a user would expect in a switcher: two Chrome windows,
+System Settings, Notion Calendar, Docker Desktop, GoLand, Activity Monitor. The other 52 were XPC view
+services (`CursorUIViewService`, `AutoFill`, `WidgetControlViewService`), `loginwindow`, thumbnail
+extensions, and several untitled auxiliary windows per application.
+
+**Layer 0 is necessary and nowhere near sufficient.** The filter is worth keeping — it removes a third
+of the list and everything it removes is genuinely not a window — but a switcher built on `CGWindowList`
+alone would show its user roughly eight entries of noise for every real one.
+
+**The title is a far better discriminator, and it is still the wrong one to build on.** It is empty for
+all of these on a machine without Screen Recording (P2.2 handles that case explicitly), and a real
+window is allowed to have no title — a fresh untitled document is the obvious example. Something that
+works on this machine today and shows nothing on a machine without a TCC grant is not a filter, it is a
+coincidence.
+
+**Consequence: P2.3 is load-bearing, not an enhancement.** Accessibility's `kAXWindowsAttribute` per
+application is what actually enumerates switchable windows, which is why AltTab is built on AX and uses
+`CGWindowList` only for identity and geometry. The roadmap had P2.3 as "AX observer registration;
+callbacks enqueue only" — observation. It also owns *enumeration*, and P2.2's output is the candidate
+set it filters, not the window list.
+
+**What did not change.** P2.2's contract stands: one crossing, packed array, no per-window call. That
+discipline is what makes an 8x over-count merely wasteful rather than expensive — 59 records cost one
+crossing, and the 52 that get discarded cost nothing but the copy. Filtering earlier, in C, would have
+meant encoding a switchability policy in the layer that is meant to report facts.
+
+---
+
+## D20 · AX is the right filter and the wrong list — 2026-09-06
+
+P2.3a built the Accessibility enumeration D19 called for, and it works: **5 switchable windows against
+CGWindowList's 59 layer-0 candidates**, and all five carried a `CGWindowID` that CoreGraphics also
+reported. That last number is the one that matters most, because the only reason the AX list has an ID
+at all is the private `_AXUIElementGetWindow` — 5 of 5 agreeing with a public API is evidence the
+private symbol returns real window numbers rather than plausible ones.
+
+**Then the same run showed AX missing two windows CoreGraphics could see**, and the two misses have
+different causes:
+
+| window | AX | CoreGraphics | cause |
+|---|---|---|---|
+| Chrome, "Facebook" (id 45) | absent | titled, `IsOnscreen` false | `kAXWindowsAttribute` returned **1** window for a process that has 2 |
+| Notion Calendar (id 1631) | absent | titled | `activationPolicy == .Accessory`, **and** `kAXWindows` returns 0 for it regardless |
+
+Probed directly to separate the two rather than guessing:
+
+    Google Chrome    pid=1079  policy=0  kAXWindows err=0 count=1
+      id=2859  min=0  New chat - Claude - Google Chrome
+    Notion Calendar  pid=31226 policy=1  kAXWindows err=0 count=0
+
+Both calls **succeeded**. This is not an error path, a timeout, or a missing grant — AX answered, and
+its answer was short.
+
+**Conclusion, and it changes the design: neither enumeration is correct alone.** CoreGraphics sees every
+window and cannot say which are switchable; Accessibility says which are switchable and cannot see every
+window. The model has to be built from a **join** on `CGWindowID`, not from either list — CoreGraphics
+supplying the universe and the on-screen state, AX supplying switchability, title and minimized state.
+That is a new task, **P2.3c**, and it is not optional: shipping P2.3a's list alone means a switcher that
+silently cannot reach a window on another Space, which is a headline feature.
+
+**What is not established.** *Why* Chrome's second window is invisible to AX. Another Space is the
+likeliest explanation and matches the received wisdom about `kAXWindowsAttribute`, but nothing here
+confirms it — driving a Space change needs a human (TCC blocks synthesising it, the same wall P0.1 and
+P0.7 hit). It is recorded as unconfirmed and belongs with **V6.2**, which already has a human in front of
+a full-screen app and multiple Spaces. **P2.4's SkyLight Space query is what turns the guess into a
+number**, and it is now load-bearing rather than a refinement.
+
+**The `.Accessory` filter stays**, despite Notion Calendar proving accessory apps own real windows.
+Removing it recovers nothing — AX reports zero windows for that process either way — and it would add
+~50 processes of Mach IPC per enumeration. The gap is real and P2.3c's join is where it gets closed.
+
+**Cost is unmeasured**, per D16. AX enumeration is Mach IPC per attribute per window, which is a very
+different order from D1's 31 ns cgo crossing, and D5's launch-time budget is what it has to fit in. Each
+application element carries a 0.25 s messaging timeout so a wedged app is skipped rather than waited on,
+but no timing number is claimed here. **V6.3** owns it.
+
+---
+
+## D21 · The join works, and it costs a TCC grant — 2026-09-06
+
+P2.3c joins both enumerations on `CGWindowID`. Measured on the same session as D19 and D20:
+
+| | count |
+|---|---|
+| CoreGraphics layer-0 candidates | 58 |
+| Accessibility switchable set | 5 |
+| **joined result** | **7** |
+| excluded, activation policy `prohibited` | 13 |
+| excluded, no title and AX did not report it | 37 |
+| excluded, process already gone | 1 |
+| **titled windows excluded** | **0** |
+
+The seven are the five Accessibility reported plus **both of D20's misses** — Chrome's second window and
+Notion Calendar's — recovered. Five carry `both` provenance, two carry `cg`. No titled layer-0 window is
+excluded, which is P2.3c's contract discharged rather than asserted.
+
+**The admission rule is `activation policy is not prohibited` AND `the window has a title`. Both halves
+are needed and neither is sufficient**, which was worth finding out by trying the weaker one:
+
+- **Policy alone admits 37 untitled auxiliary windows** — offscreen buffers, popovers and toolbars
+  belonging to Chrome, Finder, Terminal, GoLand and System Settings. Real applications own a great many
+  layer-0 windows nobody can switch to. A first attempt shipped this rule and produced a 44-window list.
+- **Title alone** admits any XPC view service that happens to have one, which is what the policy check
+  is there to stop.
+
+**The uncomfortable part: this rule depends on a TCC grant.** `kCGWindowName` requires Screen Recording.
+Without it every CoreGraphics-only title is empty, the recovery branch admits nothing, and the result
+degrades to exactly the Accessibility list — losing the other-Space windows the join exists to recover.
+D19 already warned the title is not a filter and this is that warning coming true, only narrowed: the
+title is not the *primary* filter, it is the tiebreak for windows AX could not see, and the failure mode
+is a list that is short rather than a list that is wrong.
+
+That degradation is reported rather than hidden — `Enumerator.MissingRecovery` is true exactly when it
+applies, and `gotab -list` says so. A user who grants Screen Recording for thumbnails gets correct
+enumeration as a side effect, which is worth knowing when P4.3 writes the onboarding copy: the grant is
+not only about pictures.
+
+**The lead worth following, and deliberately not followed here.** `kCGWindowBounds` needs no grant at
+all, and the 37 wrongly-admitted windows are plausibly separable by size — many auxiliary windows are
+tiny or zero-area. If bounds discriminate as well as the title does, the Screen Recording dependency
+disappears from enumeration entirely. That is a measurement, not a guess, and it is not this task's:
+recorded here so the next person does not have to notice it independently.
+
+**Cost is two crossings, not 2N** — one enumeration per source regardless of window count, which is the
+cgo rule holding up under a design that reads the window list twice.
+
+---
+
+## D22 · Posting to the event loop must never block, and dropping is sometimes correct — 2026-09-06
+
+`internal/app` exists (P2.7). The design question it had to settle is what a platform callback is
+allowed to do, because `ARCHITECTURE.md#the-cgo-rule` says "enqueue and return" and a channel send is
+not automatically either of those things.
+
+**A blocking send in a callback is a bug with a name.** An Accessibility callback or a `CGEventTap`
+callback runs on a thread the Go runtime has never seen, and the system disables a tap whose callback is
+too slow — `kCGEventTapDisabledByTimeout`, which P0.2's spike handles explicitly because it is the
+documented failure mode. A hotkey that dies silently after one stall is the worst outcome available. So
+`Post` is a non-blocking select with a `default`, always.
+
+**That forces a decision about a full queue, and the answer differs by event.** Two mechanisms, not one:
+
+| | mechanism | full behaviour |
+|---|---|---|
+| discrete events (Focused, Summon, Cycle, Quit) | buffered channel, depth 256 | drop, and report it to the caller |
+| "the window set changed" | channel of depth 1 | drop, **and that is correct** |
+
+The second is the interesting one. A dropped rescan signal loses nothing, because the signal already
+pending means "re-read everything" — twenty Accessibility notifications arriving during a Space switch
+coalesce into one enumeration, which is the behaviour wanted rather than a compromise. Depth 1 is not a
+small buffer, it is a latch.
+
+For discrete events a drop is real loss, so `Post` returns whether it was accepted and the depth is
+generous. `Focused` is survivable — the next rescan repairs ordering — and `Summon` and `Quit` are not,
+so their callers check.
+
+**Re-enumeration must not disturb MRU order, and that turned out to be an argument value.** `doRescan`
+touches every window on every pass. It upserts with a **zero `FocusSeq`**, which `Model.Upsert` reads as
+"preserve what you have" — so a window whose title changed keeps its position. ALTTAB-LESSONS §3's rule
+that a title change may not reorder is enforced by passing zero, not by a branch. The order is rebuilt
+only when membership actually changed, because a rebuild *is* a reorder.
+
+Observed: 12 rescans over 6 seconds produced **one** state print — the order did not churn. Note what
+that does and does not show. It shows repeated enumeration is stable; it does not exercise a title
+changing mid-run, which was not observed. That case is pinned in core by
+`TestModelUpsertZeroFocusPreserves`, and the swap-with-last removal the loop's backwards delete depends
+on is pinned by `TestModelRemoveMiddleFixesMovedRow`. Both predate this task.
+
+**A failed rescan does not stop the loop.** The WindowServer declines during fast user switching and at
+the login window, and a TCC grant can be revoked mid-session. Those are ordinary states, not faults; a
+loop that exited on them is a switcher that stops working and never says why. They go to `OnError`.
+
+**No mutex, and that is load-bearing rather than stylistic.** One goroutine reaches the model. If a
+second one ever needs to, the fix is to move that caller onto the loop, not to add a lock — AGENTS.md
+says to say so rather than adding the mutex, and this is the package where that would be tempting.
+
+---
+
+## D23 · Deferred verification is the standing rule, not a Phase 2–5 exception — 2026-09-07
+
+**Decision:** D16 deferred per-task tests and measurements for Phases 2–5 specifically. That scope is
+removed. **No task in any phase writes tests as it goes; all verification accumulates in the final
+phase** — Phase 6 today, and whatever the last phase is if more are added. A new phase does not bring
+its own test burden with it; it brings more rows to that table.
+
+**Why generalise rather than re-decide it each phase.** The rule was stated in three places
+(`AGENTS.md`, `ARCHITECTURE.md`, `PARALLEL-WORK.md`) and all three said "Phases 2–5". A phase-scoped
+rule expires silently: the session that opens Phase 3 has to notice the scope, decide whether it still
+applies, and update three files that will otherwise disagree — which is the drift AGENTS.md exists to
+prevent. The reasoning in D16 was never specific to Phases 2–5 anyway.
+
+**What this buys, stated as the reason it was asked for:** time and tokens. Writing a test beside each
+Phase 2 task costs roughly as much as the task, and for `internal/platform` it buys almost nothing —
+ARCHITECTURE.md already rules that layer out of unit testing, so a per-task test there would mostly be
+a mock asserting that the code calls the API it obviously calls. Batching also tests the thing that
+actually matters: subsystems composing, which no per-task test observes.
+
+**What did NOT change, and these are what keep the deferral honest rather than merely cheap:**
+
+- `scripts/check.sh` stays the merge gate and stays green. Deferring means writing no *new* per-task
+  tests; it never means deleting the suite that exists or letting the gate go red.
+- A decision a deferred test would have caught is tagged **`assumption`** in `docs/ROADMAP.md` at the
+  task that depends on it, pointing at the verification task that settles it.
+- A box is never `[x]` on a number nobody believes. P0.2 remains the worked example: complete code, no
+  measurement, deliberately still `[~]`.
+
+**The cost is unchanged from D16 and is not being talked out of.** A negative in the final phase sends
+work back into an earlier one rather than being absorbed locally. D16 listed four assumptions riding on
+this; P2.4 has since retired part of one and P2.6 has added two more (weak-linking, and a live-image
+counter with no producer). The mitigation is visibility — an assumption written down where it is used
+is recoverable; one carried in someone's head is what makes the rework expensive.
+
+---
+
+## D24 · P2.4: D20's "it must be on another Space" does not hold — 2026-09-07
+
+`core.SpaceID` is now populated by `CurrentSpace()` / `SpacesOf()` / `Spaces()` (`space.{h,m,go}`).
+SkyLight is reached through `dlopen`/`dlsym`, not a linked private framework, so `scripts/build.sh` is
+untouched and a moved symbol degrades one field to "unknown" rather than failing the launch.
+
+**Measured on a live session, both TCC grants held, five runs:**
+
+| | |
+|---|---|
+| `Spaces()` | `[1]` — one display, one Space, `id64 = 1` |
+| `CurrentSpace()` | `1`, stable across 5 consecutive calls, every run |
+| CoreGraphics layer-0 candidates | 54–63 |
+| Accessibility switchable set | 5–7 |
+| **windows on a Space other than the current one** | **0, every run** |
+| `SpacesOf` over 54–63 ids | 1.4–4.8 ms total, 22–87 µs/window, one crossing |
+
+**D20 guessed** the Chrome window Accessibility failed to enumerate was on another Space. It was not:
+both AX-invisible windows (an untitled Chrome window and Claude's) sat on Space 1 — the Space the user
+was looking at — on a machine with no second Space to be on. A window can be invisible to Accessibility
+while on the current Space, so D20's guess is not a general rule.
+
+**Still open, needs a human.** With one Space there is no way to confirm the converse — that a window
+genuinely on a second Space reports a `SpaceID != CurrentSpace()`. The negative is established; the
+positive is V6.2's, which already has a human in front of multiple Spaces.
+
+`0` stays "unknown" and is not a silent default: `SpacesOf([999999 1])` returns `[0 1]`, so the
+WindowServer declines rather than falling back to the current Space. `Rules.CurrentSpace = 0` must keep
+meaning "do not filter by Space" — 46–54 of 63 windows report 0, and a filter that read unknown as
+off-Space would empty the switcher.
+
+**A lead, not followed:** `CGSCopyWindowsWithOptionsAndTags` inverts the query to one round trip per
+Space, but disagreed with `SpacesOf` on exactly the two windows AX also could not see — a difference of
+meaning ("assigned to" vs "ordered in on"), and validating it needs a multi-Space machine.
+
+---
+
+## D25 · P2.5: raising a window is two independent halves — 2026-09-07
+
+`Raise` / `Minimize` / `Unminimize` / `Close` (`action.{h,m,go}`) turn the platform layer from an
+enumerator into a switcher. There is no public lookup from a `CGWindowID` to an `AXUIElement`, so each
+asks CoreGraphics for the owning pid and searches only that process, with a fallback scan of every
+regular application for windows AX knows and the WindowServer's list does not (D20). A stale id costs
+~24 ms and returns `ErrNoWindow`, never a panic — that race is the normal case for a list that was out
+of date when it was drawn.
+
+**Measured on macOS 26.6.2, four trials per variant:**
+
+- **`kAXRaiseAction` never answers during the Dock's restore animation.** A just-unminimized window
+  burns the full messaging timeout and returns `kAXErrorCannotComplete` (−25204) — 251–255 ms, against
+  0.2–0.4 ms for the unminimize and the attribute writes around it. The action still lands; only the
+  reply is missing. That one call now gets a 20 ms timeout and reads `kAXErrorCannotComplete` as
+  success: same 4/4, 28–35 ms instead of 258–292 ms.
+- **Restoring from the Dock does not raise the window inside its app.** Skipping the raise for a
+  just-unminimized window is the obvious way to dodge the timeout above and is wrong: 0/4 put the
+  window at the front of its app, though 4/4 still made the app frontmost. The two halves of a switch
+  are genuinely independent.
+- **Activation must not hang off the raise.** The first version returned early on a failed raise, so
+  every minimized window hit the timeout and then never activated — the user watched the window
+  un-minimize behind whatever they were leaving. `activate_app` now runs regardless of what the raise
+  returned.
+
+**`CGWindowListCopyWindowInfo` reports already-closed windows.** Finder windows closed through this API
+stayed in the CG list — and so in P2.3c's join — while AX had already dropped them. `Close` is correct
+(3/3 against the AX count); this is why resolution never trusts CoreGraphics past the pid.
+
+**`GT_ERR_NO_WINDOW = 6`** extends `shim.h`'s frozen status enum from `action.h`; `action.go`'s
+`actionError` maps it, the same shape as `shim.go`'s `statusError` for the other five. A later task
+adding a status of its own must reconcile the two numbering spaces — the closed enum is still the
+design.
+
+**Not verified (assumption → V6.5):** the `ErrNotTrusted` path (the terminal holds the grant and
+revoking it would cost the session) and `ErrUnavailable` from `Close` on a window with no close button
+(none was available). Both branches are written; neither is run.
+
+---
+
+## D26 · P2.6: capture confirms D12, and the live counter had no producer — 2026-09-07
+
+`Capture(id, maxWidth)` (`capture.{h,m,go}`) grabs one window through ScreenCaptureKit, downscaled in
+`SCStreamConfiguration` at capture time — the full-res bitmap is never allocated. `64/200/400/800` px
+bounds produce exactly `64×42 / 200×130 / 400×263 / 800×527`; anything above the window's own size
+clamps rather than upscales.
+
+**Measured, macOS 26.6.2, 65–77 layer-0 windows on screen:**
+
+- **Cost: 193 ms cold, 57 ms warm, 56.7 ms mean over 100 cycles.** D12's ~112/~46 was a quieter
+  machine; the shape holds and the conclusion stands — **capture never runs on the summon path.**
+- **Release is clean, and the instrument was shown able to see it.** 100 cycles with no images held:
+  `IOSurface` +0.0 MB. The run then ends holding 14 thumbnails on purpose: +2.3 MB against 2.1 MB
+  declared, all given back on release — D14's control, so the zero is a measurement not a blind gauge.
+- **The timeout fires and leaves nothing behind.** Forced with a 1 ms bound against a warm cache:
+  40/40 returned `ErrTimeout`, slowest call 21 ms, all 40 abandoned completion handlers fired later
+  into a context nobody waited on with no crash and `IOSurface` at 0.0 MB. This is why the capture
+  context is heap-allocated and reference-counted rather than `__block` on the stack.
+- **A 2–10% ordinary failure rate a caller must expect.** Windows `CGWindowList` reports and SCK will
+  not capture, or that closed during the run; retrying twice recovered none. Mapped to `ErrUnavailable`
+  (a normal event for a prefetcher), not `ErrInternal` (which must keep meaning "a bug in this shim").
+- **Concurrency is safe but pointless** — SCScreenshotManager serialises in the WindowServer (D12), so
+  a prefetcher uses one goroutine, not a pool. **A stale cache entry never self-heals**: the
+  shareable-window list refreshes on a miss only, so a closed-but-cached window fails every capture
+  until something else forces a refresh.
+
+**The live counter had no producer side.** `gt_image_live()` reports `shim.m`'s `static
+g_images_live`, and `gt_image_release` — the only function touching it — decrements. Every handle was
+born uncounted, so `LiveImages()` read 0 while images were held and went negative after (measured −181
+over a soak). A counter that only counts down is worse than none: V6.4's leak assertion would have been
+written against it and passed. The integrator added `gt_image_adopt` to the frozen `shim.{h,m}` (P2.6
+owns neither); `capture.m` adopts at the line it had marked. `LiveImages()` now reads 0 at rest, 1..5
+as handles are taken, 0 after release, and 0 after a double release.
+
+**No `runtime.SetFinalizer` backstop, and the reason is structural.** `Capture` returns `ImageRef` **by
+value**, so there is no stable heap object to attach a finalizer to; attaching one to a local before
+copying it out would free the bitmap while the caller's copy still points at it. A debug backstop needs
+`ImageRef` handed out as a pointer, which changes a frozen type and the contract's signature.
+ARCHITECTURE.md is unaffected — the finalizer was always a detector, never the mechanism.
+
+**`scripts/build.sh` weak-links ScreenCaptureKit.** SCK arrives in macOS 12.3 and the floor is 12.0
+(D17), so a hard link makes the bundle refuse to *launch* on 12.0–12.2 — a launch failure, not a
+missing feature. `capture.go` carries both links behind the `gotab_weak_sck` build tag, and cgo
+evaluates the tag before its LDFLAGS allowlist, so a plain `go build`/`test`/`vet` links hard and needs
+no environment (the gate is unaffected). Only `build.sh` sets the tag and
+`CGO_LDFLAGS_ALLOW='-Wl,-weak_framework.*'`; `otool -L` then shows `ScreenCaptureKit ... , weak)`.
+
+**assumptions → V6.4:** a 50-window Retina cache staying inside a sane bound (D14 saw 8.3 MB for 20
+tiles at 400 px — the shape, not the number); and the 2 s `captureTimeout` being headroom over the
+cold capture, not a measured tail latency under load.
+
+---
+
+## D27 · P2.3b: AX observers, and the one thing they need a main run loop for — 2026-09-07
+
+`StartObservers(onChange)` / `StopObservers()` (`observe.{h,m,go}`) register one `AXObserver` per
+regular application for `kAXWindowCreated`, `kAXUIElementDestroyed`, `kAXFocusedWindowChanged`,
+`kAXWindowMiniaturized` and `kAXWindowDeminiaturized`, and follow applications launching and quitting
+via `NSWorkspace`. Every notification ends in one line — `goObserveChange()` — on a run loop this shim
+owns, never the main one: that traffic must not sit in front of the summon path's pixels, and the main
+loop may not be running when `StartObservers` is called. `cmd/gotab -watch` now rescans on events, with
+a slow ticker demoted to a backstop.
+
+**Measured on this machine, throwaway `package main`:**
+
+- **`NSWorkspace` launch/terminate needs a running MAIN run loop; nothing else here does.** With
+  `CFRunLoopRun` on the main thread, a launched app and its new windows are seen; with no main run loop
+  anywhere they are **never** delivered — not late, not on another thread. `queue:nil` vs
+  `[NSOperationQueue mainQueue]` changes nothing; it is the *posting* that needs the loop. The AX
+  observers themselves fire normally without one. **`cmd/gotab` runs no main run loop until Phase 3**,
+  so today the symptom is "sees the apps that were open when it started, and no others" — stated as a
+  precondition in `observe.h` and the `StartObservers` doc, and covered by the backstop ticker.
+- **A freshly launched app registers only *some* of the five, and drops the two that matter.** Against
+  TextEdit one dispatch after its launch notification: `kAXWindowCreated`, `kAXWindowMiniaturized`,
+  `kAXWindowDeminiaturized` succeeded; `kAXUIElementDestroyed` and `kAXFocusedWindowChanged` returned
+  `kAXErrorCannotComplete`. A retry gated on "did anything register" would leave the app permanently
+  half-observed, so the gate is "all five": a per-pid bitmask retried on `{0,250,500,1000,2000,4000}`
+  ms, asking only for what is missing.
+- **`kAXUIElementDestroyed` on the *application* element does report descendant windows** — closing one
+  TextEdit document while the app stayed alive delivered it. It is also the noisiest of the five (13 in
+  a row during one deminiaturize), which is what D22's depth-1 latch is for.
+- **Background apps trickle `kAXFocusedWindowChanged` on an idle machine** (Docker Desktop, Finder, in
+  pairs every few seconds), and **`NSWorkspace` reports every helper process** — every `osascript` is a
+  launch and a terminate. `onChange` is therefore not rare and not evidence anything changed; terminate
+  is filtered to pids actually observed or `.Regular` apps (2 spurious rescans per shell command → 0).
+- **Leak measurement.** `leaks` over 20 `Start`/`Stop` cycles: zero `AXObserverRef`, zero
+  `CFRunLoopSource` from the start. One leak in the first draft — the observer thread's run loop,
+  `CFRetain`'d and never released (20 × `ROOT LEAK <CFRunLoop>`); now released in `gt_observers_stop`
+  after `g_posting` (threads inside `run_on_observer_thread`) drains to zero. Down to one 32-byte
+  system `xpc_date_t`.
+
+**assumption → V6.9:** behaviour under an Accessibility grant revoked mid-run. `gt_observers_start`
+checks `AXIsProcessTrusted()` up front but nothing re-checks, and what macOS does to a live
+`AXObserverRef` on revocation is untested — it needs a human toggling System Settings during a run.

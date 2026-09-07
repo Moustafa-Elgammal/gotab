@@ -21,7 +21,7 @@
 // rejects both `-weak_framework X` and `-Wl,-weak_framework,X` as invalid LDFLAGS. Weak linking does
 // work, but only with CGO_LDFLAGS_ALLOW set in the environment of every build — which would break the
 // plain `go run ./spike/sck` that AGENTS.md documents. A shipped binary needs the weak link (Go forces
-// minos 11.0 and SCK arrives in 12.3), so `scripts/build.sh` will have to set that variable; a spike
+// minos 12.0 and SCK arrives in 12.3), so `scripts/build.sh` will have to set that variable; a spike
 // that only ever runs on this machine does not. See D12.
 package main
 

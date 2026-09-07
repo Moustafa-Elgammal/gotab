@@ -1,0 +1,157 @@
+// The C surface of the platform layer. Kept free of Objective-C so cgo can include it directly.
+//
+// Every function here is prefixed gt_ and is callable from any thread unless its comment says
+// otherwise. Conventions fixed by P2.1 and followed by every later Phase 2/3 task:
+//
+//   - Anything that can fail returns gt_status. C cannot return a Go error, and an out-parameter
+//     errno would be a second thing to keep in sync; a small closed enum maps to a Go sentinel error
+//     in exactly one place (shim.go statusError).
+//   - Anything that returns bulk data fills a caller-allocated buffer and reports how many items it
+//     wrote, so one crossing serves N items. See docs/ARCHITECTURE.md#the-cgo-rule.
+//   - Nothing here allocates memory that Go is expected to free with free(). Bitmaps are handles.
+#ifndef GOTAB_DARWIN_SHIM_H
+#define GOTAB_DARWIN_SHIM_H
+
+#include <stdint.h>
+
+typedef int32_t gt_status;
+
+enum {
+    GT_OK = 0,
+    GT_ERR_NOT_TRUSTED = 1,  // Accessibility not granted to the responsible process
+    GT_ERR_NO_RECORDING = 2, // Screen Recording not granted to the responsible process
+    GT_ERR_UNAVAILABLE = 3,  // the OS declined to answer; not a bug, not retryable in the same way
+    GT_ERR_TIMEOUT = 4,      // the WindowServer did not answer in the time allowed (D12: SCK can hang)
+    GT_ERR_INTERNAL = 5      // a framework returned something this shim does not model
+};
+
+// One-time process setup. Idempotent, safe from any thread, and must run before any other gt_ call.
+gt_status gt_init(void);
+
+// TCC state. Both are about the RESPONSIBLE process, which under `go run` is the terminal and not
+// this binary (docs/ALTTAB-LESSONS.md section 5). Neither prompts the user.
+int32_t gt_trusted(void);     // Accessibility
+int32_t gt_can_record(void);  // Screen Recording
+
+// ---------------------------------------------------------------------------
+// Bitmap handles
+// ---------------------------------------------------------------------------
+
+// An opaque bitmap. Go never sees a CGImageRef it might mistake for memory the runtime understands;
+// it sees this. The ownership rule was established here before anything produced one, so that the
+// task which finally allocates megabytes was not also the task inventing how they are freed. P2.6 is
+// now that producer.
+typedef struct gt_image *gt_image_ref;
+
+// Takes ownership of a retained CGImageRef and returns it as an opaque handle, counting it live.
+//
+// This is the producer side of the count below, and it was missing until P2.6 went looking for it:
+// gt_image_release was the only function that touched the counter, and it decrements. Every handle
+// was therefore born uncounted, so gt_image_live() read 0 while images were held and went NEGATIVE
+// after they were freed — measured at -181 over a soak. A counter that only counts down is worse
+// than no counter, because V6.4's leak assertion would have been written against it and passed.
+//
+// The argument must already be retained: this adopts a reference, it does not take one.
+gt_image_ref gt_image_adopt(void *retained_cgimage);
+
+// Releases a bitmap. Safe on NULL, and NOT safe twice: the second call is a use-after-free, which is
+// exactly why Go's wrapper clears its pointer rather than trusting the caller.
+void gt_image_release(gt_image_ref img);
+
+// How many handles are alive right now. The leak assertion for V6.4 — after a summon completes and
+// the cache has evicted, this returns to the cache bound and not to something larger.
+int64_t gt_image_live(void);
+
+// ---------------------------------------------------------------------------
+// Window enumeration
+// ---------------------------------------------------------------------------
+
+enum {
+    // Titles are inline rather than pointers so the whole result is one flat block: no per-window
+    // malloc in C, no second crossing to fetch strings, and nothing for Go to free. The cost is a
+    // fixed 384 bytes per window, which at a few hundred windows is well under a megabyte.
+    //
+    // Truncation is on a character boundary, not a byte -- see copy_cfstring in shim.m. A title long
+    // enough to hit this is already too long to render in a switcher tile.
+    GT_TITLE_MAX = 256,
+    GT_APPNAME_MAX = 128
+};
+
+// One window, as CGWindowList knows it. Deliberately NOT a mirror of core.Window: this struct carries
+// what the WindowServer reports, and Go composes the core types from it. In particular there are no
+// flag bits here. core.WindowFlags is frozen in internal/core/api.go and defining a second copy of
+// those values in C is exactly the drift AGENTS.md warns about, so C reports facts (is it on screen,
+// what layer, what alpha) and Go decides what they mean.
+// The struct tag is not decoration. A tagless `typedef struct {...} gt_window` makes cgo synthesize
+// an anonymous type and alias to it -- `type _Ctype_gt_window = _Ctype_struct___0` -- and the number
+// is positional, so adding another anonymous struct above renumbers it. Go itself follows the alias
+// fine; IDEs resolve the alias and then fail on every field access, and the name is unstable besides.
+// Naming the tag makes cgo emit _Ctype_struct_gt_window instead.
+typedef struct gt_window {
+    uint32_t id;         // CGWindowID. Not reuse-safe -- see core.WindowID.
+    int32_t pid;         // owning process
+    uint32_t layer;      // kCGWindowLayer. 0 is an ordinary window; see gt_window_list.
+    float alpha;         // 0 means fully transparent, which is how some apps park a window
+    int32_t on_screen;   // kCGWindowIsOnscreen
+    // The three below are filled by gt_ax_window_list and left 0 by gt_window_list. CGWindowList
+    // simply does not know them, and 0 there means "not known", not "false" -- the Go wrapper is
+    // responsible for never turning an unknown into a cleared flag.
+    int32_t minimized;   // kAXMinimizedAttribute
+    int32_t hidden;      // the owning application is hidden (Cmd-H). Per app, not per window.
+    int32_t standard;    // subrole is kAXStandardWindowSubrole; 0 means a dialog, palette or sheet
+    // NSApplicationActivationPolicy of the owning application: 0 regular, 1 accessory, 2 prohibited,
+    // -1 if the process is gone by the time we ask. Filled by BOTH enumerations, because it is the
+    // one signal that separates a real application's window from an XPC view service's -- and unlike
+    // the title it does not depend on a TCC grant. See gt_window_list on why the title cannot be it.
+    int32_t policy;
+    uint16_t title_len;  // bytes in title, excluding the terminator. 0 means absent OR unpermitted.
+    uint16_t app_len;
+    char title[GT_TITLE_MAX];
+    char app[GT_APPNAME_MAX];
+} gt_window;
+
+// Fills buf with up to cap windows in ONE crossing, and writes how many it stored to *out_n.
+//
+// *out_total receives how many windows there were, which is not always *out_n: when the buffer is too
+// small the excess is dropped rather than truncated silently, and the caller grows and retries. A
+// switcher that quietly forgets the window you were reaching for is worse than a slow one.
+//
+// Windows with kCGWindowLayer != 0 are excluded and are not counted in either number. That is the
+// menubar, the Dock, shadows, overlays and the desktop -- things the API returns that are not windows
+// anyone can switch to. Excluding them is a fact about this API, not a user preference; user
+// preferences are core.Rules and were settled in P1.3.
+//
+// Titles require the Screen Recording grant. Without it kCGWindowName is absent for other
+// applications' windows and title_len comes back 0 for all of them. That is not an error and is not
+// reported as one: gt_can_record() is how a caller tells "no title" from "not allowed to see it".
+//
+// This is also why `policy` exists. The obvious way to sort real windows from noise in this list is
+// "does it have a title", and D19 measured that working perfectly -- 7 titled entries which were
+// exactly the 7 switchable windows. It is still the wrong rule: on a machine without Screen Recording
+// every title is empty and the rule admits nothing, and a genuinely untitled document window is
+// ordinary. The activation policy answers a narrower question that does not move with a TCC grant.
+gt_status gt_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *out_total);
+
+// Enumerates switchable windows through Accessibility, in one crossing, with the same buffer contract
+// as gt_window_list. This is the list the switcher is built on: D19 measured CGWindowList returning 59
+// layer-0 windows where 7 were switchable, and its titles vanish without Screen Recording.
+//
+// Requires the Accessibility grant. Without it every AX call returns kAXErrorAPIDisabled and this
+// returns GT_ERR_NOT_TRUSTED rather than an empty list -- "no windows" and "not allowed to ask" are
+// different answers and a switcher that confuses them shows the user nothing and explains nothing.
+//
+// Every attribute read is Mach IPC into another process, so an unresponsive application could stall
+// enumeration indefinitely. It cannot: each application element gets a messaging timeout, and one that
+// exceeds it is skipped rather than waited on.
+gt_status gt_ax_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *out_total);
+
+// ---------------------------------------------------------------------------
+// Threading
+// ---------------------------------------------------------------------------
+
+// Runs a Go callback on the main queue and returns immediately. The token is a runtime/cgo.Handle;
+// this file deliberately knows nothing else about it. See docs/ARCHITECTURE.md#threading: AppKit owns
+// the main thread forever, and every UI mutation from a Go goroutine arrives through here.
+void gt_dispatch_main(uintptr_t token);
+
+#endif

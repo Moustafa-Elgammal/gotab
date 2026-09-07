@@ -21,7 +21,7 @@ say ""
 # --- checks up front, so we fail before touching anything -------------------
 
 macos_major=$(sw_vers -productVersion | cut -d. -f1)
-[ "$macos_major" -ge 11 ] || die "Needs macOS 11 or later (you have $(sw_vers -productVersion))."
+[ "$macos_major" -ge 12 ] || die "Needs macOS 12 or later (you have $(sw_vers -productVersion))."
 ok "macOS $(sw_vers -productVersion)"
 
 command -v go >/dev/null 2>&1 || die "Go is not installed. Get it from https://go.dev/dl/ then re-run this."

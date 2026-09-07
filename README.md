@@ -8,7 +8,7 @@ ID, nothing inherited from an existing install.
 
 ## Install
 
-Requires macOS 11+, Go, and Xcode command line tools.
+Requires macOS 12+, Go, and Xcode command line tools.
 
 ```bash
 git clone <this repo> && cd gotab
@@ -45,7 +45,8 @@ Read in this order:
 Measured, not assumed — details in [DECISIONS.md](docs/DECISIONS.md):
 
 - cgo crossings cost **31 ns out / 39 ns back**, ~12–15x a native call, so everything is batched
-- Go's linker forces **macOS 11 minimum**; 10.14/10.15 are permanently out of scope
+- The toolchain forces a **macOS 12 minimum** (D17; D2 measured 11.0 on an older Go). 10.14/10.15 are
+  permanently out of scope
 - `CGWindowListCreateImage` is **obsoleted in macOS 15** — capture must use ScreenCaptureKit
 - Window enumeration costs **0.30 ms warm** for ~18 windows in one call — comfortably within budget
 - CoreGraphics bitmap memory **is** measurable — `vmmap --summary` -> `CG raster data` plus
