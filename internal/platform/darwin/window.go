@@ -213,6 +213,8 @@ type Enumerator struct {
 	cgRow    map[core.WindowID]int
 	origins  []Origin
 	excluded []Exclusion
+	ids      []core.WindowID // scratch for the Space lookup
+	spaces   []core.SpaceID
 }
 
 func NewEnumerator() *Enumerator {
@@ -240,7 +242,12 @@ func NewEnumerator() *Enumerator {
 // Returns ErrNotTrusted when Accessibility is not granted, rather than degrading to the CoreGraphics
 // list. That list is ~8x noise (D19), and a switcher cannot raise a window without the grant anyway,
 // so quietly showing a worse list would hide the one problem the user can fix.
+//
+// Each returned window carries its Space (P2.4), filled in one extra crossing; 0 means the
+// WindowServer would not name one, which core.Rules reads as "do not filter by Space".
 func (e *Enumerator) Enumerate(dst []core.Window) ([]core.Window, error) {
+	start := len(dst)
+
 	var err error
 	e.axWins, err = e.ax.List(e.axWins[:0], FromAX)
 	if err != nil && !errors.Is(err, ErrTruncated) {
@@ -302,7 +309,29 @@ func (e *Enumerator) Enumerate(dst []core.Window) ([]core.Window, error) {
 		}
 	}
 
+	e.fillSpaces(dst[start:])
 	return dst, nil
+}
+
+// fillSpaces asks the WindowServer which Space each window in `wins` is on and writes it back, in one
+// cgo crossing (P2.4). A SkyLight failure or an unmapped window leaves Space at 0 — "unknown", which
+// core.Rules treats as "do not filter by Space" — so this never fails the enumeration.
+func (e *Enumerator) fillSpaces(wins []core.Window) {
+	if len(wins) == 0 {
+		return
+	}
+	e.ids = e.ids[:0]
+	for _, w := range wins {
+		e.ids = append(e.ids, w.ID)
+	}
+	var err error
+	e.spaces, err = SpacesOf(e.ids, e.spaces)
+	if err != nil {
+		return // every Space stays 0; unknown, not off-Space
+	}
+	for i := range wins {
+		wins[i].Space = e.spaces[i]
+	}
 }
 
 func (e *Enumerator) note(w core.Window, reason string) {

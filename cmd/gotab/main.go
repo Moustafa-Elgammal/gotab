@@ -336,6 +336,9 @@ func watchWindows() int {
 
 	l := app.New(128)
 	l.OnError = func(err error) { fmt.Fprintf(os.Stderr, "gotab: %v\n", err) }
+	// -watch is a raw view of the enumeration and the loop, so it shows everything the switcher's
+	// filter (P4.4) would hide. `-switch` is the filtered one.
+	l.Rules = core.Rules{ShowMinimized: true, ShowHidden: true, ShowOtherSpace: true}
 
 	rescans := 0
 	last := ""
@@ -419,10 +422,10 @@ func runSwitcher() int {
 
 	l := app.New(128)
 	l.OnError = func(err error) { fmt.Fprintf(os.Stderr, "gotab: %v\n", err) }
+	l.Rules = p.Rules() // the filter checkboxes from the settings window take effect here (P4.4)
 
 	pf := darwin.NewPrefetcher(p.ThumbnailCacheSize)
 	r := &panelRenderer{opts: p.LayoutOpts(), pf: pf}
-	r.opts.Scale = 2 // Retina assumed until a task reads the actual display (assumption, V6.8)
 	l.OnState = r.onState
 
 	// Restyle on a Light/Dark flip. onChange runs on the main thread and ApplyTheme is non-blocking.
@@ -487,6 +490,13 @@ func (r *panelRenderer) onState(m *core.Model, o *core.Order, sel core.Selection
 		}
 		return
 	}
+
+	// Size the layout for the display the panel will actually land on — the one under the mouse,
+	// which gt_panel_show also uses — so the margin scales right and thumbnails are captured at the
+	// display's real backing scale (P4.4; this retires the hard-coded Scale: 2 of P4.1).
+	sw, sh, scale := darwin.ActiveScreen()
+	r.opts.Screen = core.Rect{W: sw, H: sh}
+	r.opts.Scale = scale
 
 	n := o.Len()
 	res := core.Layout(n, r.opts, r.frames[:0])

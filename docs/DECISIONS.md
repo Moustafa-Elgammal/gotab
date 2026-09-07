@@ -1233,7 +1233,47 @@ same key. `internal/platform/darwin.Prefs` implements `Reader`/`Writer` over
   rebinding is a settings-UI feature, so it is P4.2's. `assumption` → not yet rebindable.
 
 `assumption` → **V6.8**: `panelRenderer` still hard-codes `Scale: 2` after `LayoutOpts()`. A task that
-reads the display's real backing scale (P4.4) removes it.
+reads the display's real backing scale (P4.4) removes it. *(Done in P4.4 / D37 —
+`darwin.ActiveScreen()`.)*
+
+---
+
+## D37 · P4.4: the filter goes live, and the panel is sized for the display it lands on — 2026-09-07
+
+Two things the switcher had the parts for since Phase 2/3 but never connected.
+
+**The filter.** `internal/app`'s `doRescan` has ordered *every* window since P2.7. Now `Loop.Rules`
+(set from `Prefs.Rules()` — the P4.2 checkboxes) runs the model through `core.Filter` (P1.3) →
+`core.Order.RebuildFrom` on every rescan, so a window that fails the rules is not in `Order` and the
+renderer never draws it and cycling skips it.
+
+- **Rebuild every pass, not "only when membership changed".** The old gate missed a window
+  minimizing or the current Space flipping — filter *inputs* that move without the window set
+  changing. It is safe to rebuild always: `RebuildFrom` sorts by `FocusSeq`, which a title or frame
+  change never touches (`doRescan` upserts a zero `FocusSeq` = "preserve", D22), so a pass where
+  nothing filter-relevant moved yields byte-identical `Order.Rows` — `-watch`'s print-on-change stays
+  quiet, which is P2.7's MRU-stability check. `Rebuild` and `RebuildFrom` now share `sortByFocus`.
+- **`CurrentSpace` is runtime, not a setting.** `Prefs.Rules()` leaves it 0; `doRescan` fills it from
+  `darwin.CurrentSpace()` each pass. A Space switch doesn't always raise an AX notification, but it
+  changes on-screen state, which does, so a rescan follows it.
+- **`Enumerate` fills `core.Window.Space`** in one extra crossing (`SpacesOf`, P2.4: 1.4–4.8 ms for
+  ~60 windows — off the summon path, D5). A SkyLight failure leaves every Space 0, which
+  `core.Rules.Allows` reads as "don't filter by Space" (`TestFilterUnknownSpace`).
+- **`-watch` opts out** — it sets `ShowMinimized/Hidden/OtherSpace` true so it stays a raw view of
+  the enumeration; `-switch` is the filtered one.
+
+**The display.** `core.Layout`'s margin scales with `Screen.W` and its `Overflow` needs `Screen.H`,
+and thumbnails want the real backing scale. `panelRenderer.onState` now sets `LayoutOpts.Screen` and
+`Scale` from `darwin.ActiveScreen()` — the screen under the mouse, resolved by the same
+`screen_under_mouse()` helper `gt_panel_show` uses for placement, so sizing and placement agree.
+This retires P4.1's hard-coded `Scale: 2`. `ActiveScreen` reads `NSScreen` off the loop goroutine;
+AppKit documents that as main-thread-only but the values are immutable snapshots and off-main reads
+are common — an `assumption` in `panel.go`, V6.2 / V6.5.
+
+**Still inert:** `ActiveAppOnly` — `Prefs.Rules()` sets the bool but not `Rules.ActiveApp`, so
+`Allows` skips it; it needs the frontmost pid captured on `Summon` (a `darwin.FrontmostApp()` and a
+loop field), a small follow-up. And the panel *itself* across Spaces is P3.1's `collectionBehavior`,
+still → **V6.2**.
 
 ---
 

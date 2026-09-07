@@ -358,21 +358,30 @@ static gt_status panel_populate(const gt_tile *tiles, int32_t n) {
     return GT_OK;
 }
 
+// The screen under the mouse is where the user is looking -- not mainScreen, which is wherever the
+// key window / menu bar is. mouseLocation and NSScreen.frame are both global, bottom-left. Shared by
+// gt_panel_show (placement) and gt_active_screen (so core.Layout sizes for the same display).
+static NSScreen *screen_under_mouse(void) {
+    NSPoint mouse = [NSEvent mouseLocation];
+    for (NSScreen *s in [NSScreen screens]) {
+        if (NSPointInRect(mouse, [s frame])) return s;
+    }
+    return [NSScreen mainScreen];
+}
+
+void gt_active_screen(int32_t *width_pt, int32_t *height_pt, int32_t *scale) {
+    NSScreen *s = screen_under_mouse();
+    NSRect vf = s ? [s visibleFrame] : NSZeroRect;
+    if (width_pt) *width_pt = (int32_t)vf.size.width;
+    if (height_pt) *height_pt = (int32_t)vf.size.height;
+    if (scale) *scale = s ? (int32_t)[s backingScaleFactor] : 1;
+}
+
 gt_status gt_panel_show(const gt_tile *tiles, int32_t n, int32_t panel_w, int32_t panel_h) {
     if (!g_panel) return GT_ERR_INTERNAL;
     if (panel_w <= 0 || panel_h <= 0) return GT_ERR_INTERNAL;
 
-    // The screen under the mouse is where the user is looking -- not mainScreen, which is wherever
-    // the key window / menu bar is. mouseLocation and NSScreen.frame are both global, bottom-left.
-    NSPoint mouse = [NSEvent mouseLocation];
-    NSScreen *screen = nil;
-    for (NSScreen *s in [NSScreen screens]) {
-        if (NSPointInRect(mouse, [s frame])) {
-            screen = s;
-            break;
-        }
-    }
-    if (!screen) screen = [NSScreen mainScreen];
+    NSScreen *screen = screen_under_mouse();
     if (!screen) return GT_ERR_UNAVAILABLE;
 
     NSRect vf = [screen visibleFrame];

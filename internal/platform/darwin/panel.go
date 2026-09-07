@@ -57,6 +57,22 @@ func UpdatePanel(tiles []Tile) error {
 // HidePanel orders the panel out; the panel is kept for the next ShowPanel.
 func HidePanel() { C.gt_panel_hide() }
 
+// ActiveScreen reports the visible frame (points) and backing scale of the display the next
+// ShowPanel will use — the one under the mouse. Feed it into core.LayoutOpts.Screen / Scale so the
+// panel is sized for the display it lands on. Zero width/height (scale 1) if there is no screen.
+//
+// It reads NSScreen, which AppKit documents as main-thread-only; in practice the array and each
+// screen's frame/scale are immutable snapshots refreshed on a notification, and reading them off the
+// loop goroutine is common. Treated as an assumption the real app confirms — V6.2 / V6.5.
+func ActiveScreen() (widthPt, heightPt, scale int) {
+	var w, h, s C.int32_t
+	C.gt_active_screen(&w, &h, &s)
+	if s < 1 {
+		s = 1
+	}
+	return int(w), int(h), int(s)
+}
+
 // PanelVisible reports whether the panel is on screen.
 func PanelVisible() bool { return C.gt_panel_visible() != 0 }
 

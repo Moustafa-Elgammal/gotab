@@ -34,15 +34,16 @@ assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
 ```
 
 `internal/core` is complete (Phase 1) plus the P3.2 layout engine. `internal/platform/darwin`
-enumerates the switchable set, observes window events, queries Spaces, raises / minimizes / closes
-windows (Phase 2, D24–D27), draws the panel, prefetches thumbnails, tracks the appearance, taps a
-configurable hotkey (Phase 3, D28–D33), reads/writes the CFPreferences domain, shows a native
-settings window, and onboards missing permissions (Phase 4 so far, D34–D36). `internal/prefs` is the
-pure-Go settings schema. `internal/app` owns the event loop — one goroutine, no mutex (P2.7 / D22).
-`cmd/gotab -switch` is the switcher end to end on a live AppKit run loop; `-settings` opens the
-settings window, `-permissions` walks the grants, `-prefs` / `-check` are the CLIs. Nothing has run
-any of it on a real screen — an agent host has no window server — so the pixels, the granted hotkey
-round trip, the settings window, and the permissions modal are Phase 6's (V6.1–V6.5, V6.9).
+enumerates the switchable set (with each window's Space), observes window events, raises / minimizes /
+closes windows (Phase 2, D24–D27), draws the panel sized for its display, prefetches thumbnails,
+tracks the appearance, taps a configurable hotkey (Phase 3, D28–D33), reads/writes the CFPreferences
+domain, shows a native settings window, and onboards missing permissions (Phase 4 so far, D34–D37).
+`internal/prefs` is the pure-Go settings schema. `internal/app` owns the event loop — one goroutine,
+no mutex (P2.7 / D22) — and it filters the window set through `core.Rules` (P4.4). `cmd/gotab -switch`
+is the switcher end to end on a live AppKit run loop; `-settings` opens the settings window,
+`-permissions` walks the grants, `-prefs` / `-check` are the CLIs. Nothing has run any of it on a real
+screen — an agent host has no window server — so the pixels, the granted hotkey round trip, the
+settings window, and the permissions modal are Phase 6's (V6.1–V6.5, V6.9).
 
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
