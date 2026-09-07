@@ -60,8 +60,27 @@ func lightPalette() C.gt_palette {
 // Applying
 // ---------------------------------------------------------------------------
 
-// ApplyTheme reads the current effective appearance and pushes a matching palette and vibrancy
-// material to the panel through P3.1's frozen setters.
+// appearanceOverride is 0 "follow the system", 1 "force light", 2 "force dark". Set from the
+// Appearance preference (P4.1) via SetAppearance; ApplyTheme consults it, and under a force the
+// WatchAppearance callback's re-ApplyTheme becomes a cheap no-op that ignores the system flip.
+var appearanceOverride atomic.Int32
+
+// SetAppearance chooses which palette ApplyTheme installs: "" / "system" follows the OS (and the
+// WatchAppearance watcher restyles on a flip), "light" and "dark" force it. Call before ApplyTheme.
+// Safe from any goroutine.
+func SetAppearance(mode string) {
+	switch mode {
+	case "light":
+		appearanceOverride.Store(1)
+	case "dark":
+		appearanceOverride.Store(2)
+	default:
+		appearanceOverride.Store(0)
+	}
+}
+
+// ApplyTheme pushes a palette and vibrancy material to the panel through P3.1's frozen setters —
+// matching the system's effective appearance, or the SetAppearance override if one is set.
 //
 // Main thread only -- it reads NSApp state and calls the panel setters, both of which assert off the
 // main thread (docs/ARCHITECTURE.md#threading). A caller on another goroutine wraps it in OnMain, the
@@ -73,8 +92,17 @@ func lightPalette() C.gt_palette {
 // call cannot be replayed from here. Without it the panel falls back to panel.h's built-in dark
 // default: styled, not unstyled, but not necessarily matching Light.
 func ApplyTheme() error {
+	var dark bool
+	switch appearanceOverride.Load() {
+	case 1:
+		dark = false
+	case 2:
+		dark = true
+	default:
+		dark = C.gt_theme_is_dark() != 0
+	}
 	var pal C.gt_palette
-	if C.gt_theme_is_dark() != 0 {
+	if dark {
 		pal = darkPalette()
 	} else {
 		pal = lightPalette()

@@ -1194,3 +1194,178 @@ budget, and the first C→Go crossing on the tap thread (the runtime meeting a t
 seen), are unmeasured — a synthetic event's timestamp is not on the HID path, so P0.2's
 `spike/hotkey -manual -n 20` needs a human. The granted round trip — a real ⌥⇥ seen, swallowed,
 summon→cycle→raise — is V6.5.
+
+---
+
+## D34 · P4.1: settings live in the bundle-id CFPreferences domain, keyed by identity not a string — 2026-09-07
+
+`internal/prefs` is the pure-Go schema: a flat `Prefs` struct, `Default()`, `Load(Reader)`,
+`Save(Writer)`, `Set("Key=Value")` for the CLI, and the one-way derivations `LayoutOpts()` / `Rules()`.
+Keys are the exported field names, so a missing or wrong-typed key falls back to `Default()` — never
+Go's zero — and `gotab -prefs MaxColumns=5` and `defaults write app.gotab MaxColumns 5` address the
+same key. `internal/platform/darwin.Prefs` implements `Reader`/`Writer` over
+`CFPreferencesCopyAppValue` / `CFPreferencesSetAppValue` on `kCFPreferencesCurrentApplication`
+(`prefs.{h,m,go}`).
+
+- **The domain is the running binary's identity, not a literal `"app.gotab"`.** From
+  `build/GoTab.app` it is `CFBundleIdentifier` (`app.gotab`) and `defaults read app.gotab` shows the
+  schema — verified: `MaxColumns = 3`, `HotkeyModifiers = 524288`, `BlockedApps = ()` after
+  `gotab -prefs MaxColumns=3`. Under `go run` / a bare `go build` binary it is that binary's own name
+  (`~/Library/Preferences/<name>.plist`), so a dev build writes a throwaway domain and cannot corrupt
+  the real prefs. This is the same responsible-process identity rule TCC uses (ALTTAB-LESSONS §5), and
+  it is the honest behaviour, not a limitation to fix.
+- **`Save` writes the whole record, not a diff.** A field at its default is still persisted, so a
+  later change to `Default()` cannot silently move a user's setting.
+- **String arrays cross cgo `'\n'`-joined** (`BlockedApps`). A window-server application name never
+  contains a newline; the join is lossy only for a value that cannot occur.
+- **The `Appearance` override is an `atomic.Int32` in `theme.go`** that `ApplyTheme` consults; a
+  forced Light/Dark makes the `WatchAppearance` callback's re-apply a no-op. No `theme.m` change.
+
+**Two schema fields have no consumer yet, and this is deliberate — the schema is defined once:**
+
+- The **filter** fields (`ShowMinimized`, `ShowHidden`, `ShowOtherSpace`, `ActiveAppOnly`,
+  `BlockedApps`). `core.Filter` (P1.3) and `Prefs.Rules()` exist, but `internal/app`'s `doRescan`
+  orders **every** window — the loop has never filtered. Wiring it (a `Loop.Rules` field, and a
+  `core.Order` that rebuilds from a filtered row set) is its own change, and P4.4 touches the same
+  code for Spaces. `assumption` → these prefs are inert until then.
+- The **hotkey chord** (`HotkeyKeyCode` / `HotkeyModifiers`, defaulting to 48 / `0x80000` = ⌥Tab).
+  `hotkey.m`'s tap matches a fixed keycode; making `gt_hotkey_start` take a chord is small but
+  rebinding is a settings-UI feature, so it is P4.2's. `assumption` → not yet rebindable.
+
+`assumption` → **V6.8**: `panelRenderer` still hard-codes `Scale: 2` after `LayoutOpts()`. A task that
+reads the display's real backing scale (P4.4) removes it. *(Done in P4.4 / D37, below.)*
+
+---
+
+## D35 · P4.2: one settings window, one assign form, and a rebindable chord — 2026-09-07
+
+`internal/platform/darwin/settings.{h,m,go}` build a fixed-size `NSWindow` with a control per wired
+setting — 4 filter checkboxes, a blocked-apps text field, an Appearance popup, Columns and
+Thumbnail-cache steppers, and a hotkey recorder — laid out with manual top-down frames (the window
+does not resize, so a stack view earns nothing). `gotab -settings` opens it on its own run loop.
+
+- **One assign form.** Every control funnels through `emit(key, value)` →
+  `goSettingsAssign("Key=Value")` → `prefs.Set` → `Save`. Reusing P4.1's `Set` parser means no
+  per-control marshalling and no second schema, and the CLI (`-prefs Key=Value`), `defaults(1)`, and
+  the window all drive the same path — so the `Key=Value` round trip is verified via `-prefs` even
+  though the window's pixels are not reachable from here.
+- **`darwin` still does not import `internal/prefs`.** `OpenSettings` takes a primitives-only
+  `SettingsValues`; `cmd/gotab` maps a `prefs.Prefs` onto it. `darwin.Prefs` has always implemented
+  `prefs.Reader`/`Writer` structurally, and this keeps that boundary.
+- **The hotkey chord is configurable end to end.** `gt_hotkey_start` now takes `(keycode,
+  modifiers)`; `g_chord_key` / `g_chord_mods` replace the hardcoded Tab + Alternate, and the
+  "modifiers released → commit" edge became `g_chord_was_held` transitioning, which works for any
+  modifier set. `modifiers == 0` is rejected in three places — `prefs.Set`, `StartHotkey`, and the
+  recorder (`NSBeep`) — because a bare-key chord would be swallowed for every application. If a chord
+  includes Shift, backward-cycle is unavailable (Shift cannot mean two things); an acceptable corner.
+- **`HotkeyDisplay` (`hotkey.go`) is the only chord formatter** — a small keycode table plus the four
+  modifier symbols. The recorder emits raw values and Go formats the label, so the string is produced
+  in one place; an uncommon keycode shows as its number.
+- **`-settings` is its own process** and the window says nothing misleading about it: it writes the
+  plist, and a running `gotab -switch` re-reads settings only on its next launch. The app switches to
+  `NSApplicationActivationPolicyRegular` while the window is open (it is `Accessory` for the panel);
+  `-settings` never creates the panel, so there is no conflict.
+
+**Still not wired:** the filter checkboxes **write** `ShowMinimized` etc., but `internal/app`'s loop
+still does not **read** `core.Rules` — P4.1's open item, and P4.4's to close (Spaces touch the same
+code). `TileWidth`/`TileHeight` stay CLI-only (`0 = auto` reads badly as a stepper).
+
+---
+
+## D36 · P4.3: onboarding is an alert plus a poll, and it must survive being run headless — 2026-09-07
+
+`internal/platform/darwin/permissions.{h,m,go}` handle a missing grant: a modal `NSAlert` names it,
+says what it is for, and on "Open System Settings" opens the relevant Privacy pane — and, for Screen
+Recording, calls `CGRequestScreenCaptureAccess` so the app gets a row in that list. `gotab
+-permissions` and `gotab -switch` both call it and then **poll** `CheckPermissions` every 750 ms
+until the grant appears.
+
+- **Recovery is a poll, not an observer.** TCC exposes no "grant changed" signal worth building on; a
+  poll on `gt_trusted()` / `gt_can_record()` picks a Settings toggle up within ~1 s. `-switch` gates
+  on Accessibility (without it nothing below works), caps the wait at 5 minutes, then quits with a
+  re-open hint; Screen Recording missing is a one-line warning and it runs on. macOS relaunching
+  gotab itself on the Accessibility grant is not a "relaunch loop" — the fresh process passes the
+  gate and never prompts.
+- **`[NSAlert runModal]` cannot be interrupted.** Run with no window server it blocks forever and
+  ignores SIGINT — a first cut hung under `kill -INT` and needed `kill -9`. So `gt_permissions_prompt`
+  checks `[[NSScreen screens] count] == 0` first and returns `GT_ERR_INTERNAL`; `PromptPermissions`
+  reports that as `shown == false` and the caller prints the deep links instead.
+- **Modal from Finder, text from a shell.** `stderrIsTTY()` decides. A `.app` from Finder has no
+  controlling terminal, so the alert is the only channel; from a shell an alert stealing focus for
+  text the user could read inline is worse, so the TTY path prints the `x-apple.systempreferences:`
+  links and opens the pane directly. Verified via a pty: prints, opens the pane, enters the poll, ^C
+  exits cleanly.
+- **No new window.** An `NSAlert` needs no controller, no layout, no in-window timer. The onboarding
+  "UI" is the alert plus the System Settings pane — the native pattern, and the least code.
+
+**V6.9** is the human half: the modal itself, and a full revoke → start `-switch` → grant in Settings
+→ switcher comes up without relaunching. The poll and the headless fallback are exercised here.
+
+---
+
+## D37 · P4.4: the filter goes live, and the panel is sized for the display it lands on — 2026-09-07
+
+Two things the switcher had the parts for since Phase 2/3 but never connected.
+
+**The filter.** `internal/app`'s `doRescan` has ordered *every* window since P2.7. Now `Loop.Rules`
+(set from `Prefs.Rules()` — the P4.2 checkboxes) runs the model through `core.Filter` (P1.3) →
+`core.Order.RebuildFrom` on every rescan, so a window that fails the rules is not in `Order` and the
+renderer never draws it and cycling skips it.
+
+- **Rebuild every pass, not "only when membership changed".** The old gate missed a window
+  minimizing or the current Space flipping — filter *inputs* that move without the window set
+  changing. It is safe to rebuild always: `RebuildFrom` sorts by `FocusSeq`, which a title or frame
+  change never touches (`doRescan` upserts a zero `FocusSeq` = "preserve", D22), so a pass where
+  nothing filter-relevant moved yields byte-identical `Order.Rows` — `-watch`'s print-on-change stays
+  quiet, which is P2.7's MRU-stability check. `Rebuild` and `RebuildFrom` now share `sortByFocus`.
+- **`CurrentSpace` is runtime, not a setting.** `Prefs.Rules()` leaves it 0; `doRescan` fills it from
+  `darwin.CurrentSpace()` each pass. A Space switch doesn't always raise an AX notification, but it
+  changes on-screen state, which does, so a rescan follows it.
+- **`Enumerate` fills `core.Window.Space`** in one extra crossing (`SpacesOf`, P2.4: 1.4–4.8 ms for
+  ~60 windows — off the summon path, D5). A SkyLight failure leaves every Space 0, which
+  `core.Rules.Allows` reads as "don't filter by Space" (`TestFilterUnknownSpace`).
+- **`-watch` opts out** — it sets `ShowMinimized/Hidden/OtherSpace` true so it stays a raw view of
+  the enumeration; `-switch` is the filtered one.
+
+**The display.** `core.Layout`'s margin scales with `Screen.W` and its `Overflow` needs `Screen.H`,
+and thumbnails want the real backing scale. `panelRenderer.onState` now sets `LayoutOpts.Screen` and
+`Scale` from `darwin.ActiveScreen()` — the screen under the mouse, resolved by the same
+`screen_under_mouse()` helper `gt_panel_show` uses for placement, so sizing and placement agree.
+This retires P4.1's hard-coded `Scale: 2`. `ActiveScreen` reads `NSScreen` off the loop goroutine;
+AppKit documents that as main-thread-only but the values are immutable snapshots and off-main reads
+are common — an `assumption` in `panel.go`, V6.2 / V6.5.
+
+**Still inert:** `ActiveAppOnly` — `Prefs.Rules()` sets the bool but not `Rules.ActiveApp`, so
+`Allows` skips it; it needs the frontmost pid captured on `Summon` (a `darwin.FrontmostApp()` and a
+loop field), a small follow-up. And the panel *itself* across Spaces is P3.1's `collectionBehavior`,
+still → **V6.2**.
+
+---
+
+## D38 · P4.5: the bundle packages and round-trips; the rest is a machine — 2026-09-07
+
+`build.sh` / `install.sh` / `uninstall.sh` already existed; P4.5 finished them.
+
+- **The bundle is signed, not just the binary.** `codesign --force --sign - "$OUT"` on the `.app`
+  seals `Info.plist` and `_CodeSignature/CodeResources`; `codesign --verify --strict` right after
+  proves it took, and `install.sh` re-verifies the installed copy — a copy that lost its signature
+  (a bad transfer, a filesystem that drops xattrs) is caught before the first double-click, not at it.
+- **`spctl -a` says `rejected`, and that is correct.** Gatekeeper's assessment only gates a
+  *quarantined* copy — downloaded, AirDropped. A locally built, locally installed app has no
+  `com.apple.quarantine` xattr and launches. A copy carried to another machine, or a notarized
+  release, is V6.7; `build.sh` and `install.sh` both say a public release needs a Developer ID.
+- **No-flags default is launch-context-sensitive.** `os.Executable()` ending in
+  `.app/Contents/MacOS/` means Finder started it and the switcher is what is wanted — a usage string
+  to a stderr nobody reads would be an app that does nothing. From a shell, the help text stays.
+- **Two version strings.** `git describe` on a tag-less repo is a bare hash, and
+  `CFBundleShortVersionString` is meant to be dotted numbers, so `SHORT_VERSION="0.1.0"` is the
+  marketing string and `git describe` is `CFBundleVersion` and `-X main.version` — the build id a bug
+  report can name.
+- **`--purge` clears TCC too.** `tccutil reset Accessibility app.gotab` and `tccutil reset
+  ScreenCapture app.gotab` (that service name, not `ScreenRecording`) — idempotent, so it is
+  best-effort and quiet when the grant was never given. Verified against a temp `GOTAB_APPS` dir: app,
+  plist, and both TCC rows gone, `tccutil` reported success.
+
+**V6.7** is now purely the machine half: a first launch from `/Applications` on a genuinely clean
+account, and on a real macOS 12 host (the `minos`/plist check proves they *agree*, not that a 12.0
+binary *runs* — D17). No icon yet (`CFBundleIconFile` absent); that needs artwork and is Phase 5.

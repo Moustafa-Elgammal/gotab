@@ -3,7 +3,9 @@
 set -euo pipefail
 
 APP_NAME="GoTab"
-DEST="/Applications/${APP_NAME}.app"
+# GOTAB_APPS overrides the install directory — for a per-user install (~/Applications) or a test run.
+# Defaults to the system location.
+DEST="${GOTAB_APPS:-/Applications}/${APP_NAME}.app"
 
 bold=$'\033[1m'; red=$'\033[31m'; green=$'\033[32m'; yellow=$'\033[33m'; dim=$'\033[2m'; off=$'\033[0m'
 say()  { printf '%s\n' "$*"; }
@@ -46,7 +48,11 @@ if [ -d "$DEST" ]; then
   rm -rf "$DEST"
 fi
 
+mkdir -p "$(dirname "$DEST")"
 cp -R "build/${APP_NAME}.app" "$DEST"
+# A copy that lost its signature (a bad rsync, a filesystem that drops xattrs) will not launch; find
+# out now, not at first double-click.
+codesign --verify --strict "$DEST" || die "The installed copy failed signature verification."
 ok "Installed to ${DEST}"
 
 # --- permissions ------------------------------------------------------------
@@ -68,6 +74,10 @@ say ""
 
 if [ "${1:-}" = "--open-settings" ]; then
   open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+  open "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 fi
 
+say "GoTab also walks you through this itself on first launch, and again from"
+say "${bold}open ${DEST} --args -permissions${off}."
+say ""
 ok "Done. Launch it with: ${bold}open ${DEST}${off}"

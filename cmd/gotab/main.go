@@ -21,6 +21,7 @@ import (
 	"github.com/Moustafa-Elgammal/gotab/internal/app"
 	"github.com/Moustafa-Elgammal/gotab/internal/core"
 	"github.com/Moustafa-Elgammal/gotab/internal/platform/darwin"
+	"github.com/Moustafa-Elgammal/gotab/internal/prefs"
 )
 
 // version is injected by scripts/build.sh via -ldflags.
@@ -40,7 +41,10 @@ func main() {
 	raw := flag.Bool("raw", false, "list only the CoreGraphics candidate set (implies -list)")
 	axOnly := flag.Bool("ax", false, "list only the Accessibility set (implies -list)")
 	watch := flag.Bool("watch", false, "run the event loop and print the list as it changes; ^C to stop")
-	switchMode := flag.Bool("switch", false, "show the real switcher panel (scripted summon; ^C to stop)")
+	switchMode := flag.Bool("switch", false, "run the switcher: ⌥⇥ summons, ⌥ held cycles, release raises; ^C to stop")
+	prefsMode := flag.Bool("prefs", false, "print effective preferences; with Key=Value args, set them and exit")
+	settingsMode := flag.Bool("settings", false, "open the settings window")
+	permMode := flag.Bool("permissions", false, "check the grants, explain any that are missing, and wait for them")
 	flag.Parse()
 
 	if *showVersion {
@@ -59,17 +63,31 @@ func main() {
 	if *check {
 		os.Exit(reportPermissions())
 	}
+	if *permMode {
+		os.Exit(runPermissions())
+	}
 	if *list || *raw || *axOnly {
 		os.Exit(listWindows(*raw, *axOnly))
 	}
 	if *watch {
 		os.Exit(watchWindows())
 	}
+	if *prefsMode {
+		os.Exit(runPrefs(flag.Args()))
+	}
+	if *settingsMode {
+		os.Exit(runSettings())
+	}
 	if *switchMode {
 		os.Exit(runSwitcher())
 	}
 
-	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch for the switcher, -watch for the text loop, or -check.\n", version)
+	// Double-clicked from Finder there are no flags, and the switcher is what the user wants — a
+	// usage message they cannot see would just be an app that does nothing. From a shell, print help.
+	if runningInBundle() {
+		os.Exit(runSwitcher())
+	}
+	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch, -settings, -permissions, -watch, -prefs or -check.\n", version)
 	os.Exit(1)
 }
 
@@ -87,9 +105,134 @@ func reportPermissions() int {
 	// The grant belongs to the *responsible* process, so running this under `go run` reports the
 	// terminal's permissions rather than gotab's. Saying so here saves the next person the hour
 	// ALTTAB-LESSONS section 5 documents.
-	fmt.Fprintln(os.Stderr, "\nGrant these in System Settings > Privacy & Security.")
+	fmt.Fprintln(os.Stderr, "\nGrant these in System Settings > Privacy & Security:")
+	if !p.Accessibility {
+		fmt.Fprintln(os.Stderr, "  "+paneAccessibility)
+	}
+	if !p.ScreenRecording {
+		fmt.Fprintln(os.Stderr, "  "+paneScreenRecord)
+	}
+	fmt.Fprintln(os.Stderr, "`gotab -permissions` walks you through it and waits for the grant.")
 	fmt.Fprintln(os.Stderr, "Run from a built .app: under `go run` these report the terminal's grants, not gotab's.")
 	return 1
+}
+
+// stderrIsTTY reports whether stderr is a terminal. gotab launched from Finder has no terminal, and a
+// modal alert is the only channel; from a shell the alert would steal focus for information the user
+// can read inline, so the terminal path prints instead.
+func stderrIsTTY() bool {
+	fi, err := os.Stderr.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+// runningInBundle reports whether this executable is the one inside GoTab.app, as opposed to a bare
+// `go build` binary or `go run`. It decides the no-flags default: the switcher for a Finder launch, a
+// usage message for a shell.
+func runningInBundle() bool {
+	exe, err := os.Executable()
+	return err == nil && strings.Contains(exe, ".app/Contents/MacOS/")
+}
+
+const (
+	paneAccessibility = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+	paneScreenRecord  = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+)
+
+// promptForGrants asks the user to grant what is missing. From Finder (no TTY, window server present)
+// it is a modal alert whose "Open System Settings" opens the pane; from a shell, or when there is no
+// window server, it is a printed explanation plus opening the pane directly. Returns whether to
+// proceed to the wait loop — false only if the user quit the modal.
+func promptForGrants(needAX, needSR bool) bool {
+	if !stderrIsTTY() {
+		if shown, proceed := darwin.PromptPermissions(needAX, needSR); shown {
+			return proceed
+		}
+		// No window server — fall through to the printed path.
+	}
+	fmt.Fprintln(os.Stderr, "gotab: grant the missing permission in System Settings › Privacy & Security:")
+	if needAX {
+		fmt.Fprintln(os.Stderr, "  Accessibility     "+paneAccessibility)
+	}
+	if needSR {
+		fmt.Fprintln(os.Stderr, "  Screen Recording  "+paneScreenRecord)
+	}
+	if needAX {
+		darwin.OpenPrivacyPane("accessibility")
+	} else {
+		darwin.OpenPrivacyPane("screen-recording")
+	}
+	return true
+}
+
+// runPermissions is `gotab -permissions`: report the grants, and for any that are missing prompt,
+// open System Settings, and wait — recovering the moment the grant appears, no relaunch. ^C stops the
+// wait.
+func runPermissions() int {
+	p := darwin.CheckPermissions()
+	fmt.Printf("gotab %s\n", version)
+	fmt.Printf("  Accessibility     %s\n", grant(p.Accessibility))
+	fmt.Printf("  Screen Recording  %s\n", grant(p.ScreenRecording))
+	if p.OK() {
+		fmt.Println("\nboth grants are in place.")
+		return 0
+	}
+
+	if !promptForGrants(!p.Accessibility, !p.ScreenRecording) {
+		return 1 // user chose Quit
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	fmt.Println("\nwaiting for the grant(s) — toggle them in System Settings; ^C to stop.")
+	for last := p; ctx.Err() == nil; {
+		time.Sleep(750 * time.Millisecond)
+		q := darwin.CheckPermissions()
+		if q.Accessibility && !last.Accessibility {
+			fmt.Println("  Accessibility granted.")
+		}
+		if q.ScreenRecording && !last.ScreenRecording {
+			fmt.Println("  Screen Recording granted.")
+		}
+		last = q
+		if q.OK() {
+			fmt.Println("done — both grants are in place.")
+			return 0
+		}
+	}
+	return 1
+}
+
+// ensurePermissions gates the switcher on the grants it needs. Accessibility is mandatory — without it
+// gotab cannot enumerate, raise, or tap the hotkey. Screen Recording is optional (a warning, then it
+// runs degraded). A missing mandatory grant is prompted, System Settings is opened, and gotab polls
+// until it appears — recovering without a relaunch. macOS may relaunch gotab itself on an
+// Accessibility grant; the fresh process then passes here and never prompts.
+func ensurePermissions(ctx context.Context) bool {
+	p := darwin.CheckPermissions()
+	if p.Accessibility {
+		if !p.ScreenRecording {
+			fmt.Fprintln(os.Stderr, "gotab: Screen Recording is off — no thumbnails, and no titles for other apps.")
+		}
+		return true
+	}
+
+	if !promptForGrants(true, !p.ScreenRecording) {
+		return false // user chose Quit
+	}
+
+	fmt.Fprintln(os.Stderr, "gotab: waiting for Accessibility — grant it in System Settings; ^C to stop.")
+	deadline := time.Now().Add(5 * time.Minute)
+	for ctx.Err() == nil && time.Now().Before(deadline) {
+		time.Sleep(750 * time.Millisecond)
+		if darwin.CheckPermissions().Accessibility {
+			fmt.Fprintln(os.Stderr, "gotab: Accessibility granted — starting.")
+			return true
+		}
+	}
+	if ctx.Err() == nil {
+		fmt.Fprintln(os.Stderr, "gotab: Accessibility still not granted — quitting. Re-open GoTab after granting it.")
+	}
+	return false
 }
 
 // listWindows drives the enumeration and prints what came back. This is what verification looks like
@@ -206,6 +349,9 @@ func watchWindows() int {
 
 	l := app.New(128)
 	l.OnError = func(err error) { fmt.Fprintf(os.Stderr, "gotab: %v\n", err) }
+	// -watch is a raw view of the enumeration and the loop, so it shows everything the switcher's
+	// filter (P4.4) would hide. `-switch` is the filtered one.
+	l.Rules = core.Rules{ShowMinimized: true, ShowHidden: true, ShowOtherSpace: true}
 
 	rescans := 0
 	last := ""
@@ -260,29 +406,39 @@ func watchWindows() int {
 	return 0
 }
 
-// runSwitcher brings the whole Phase 3 pipeline up: the panel and its appearance, the event loop, the
-// Accessibility observers, a thumbnail prefetcher, and — on the main thread — the AppKit run loop that
-// makes all of it composite. It scripts one summon because nothing posts one yet (P0.2's hotkey is a
-// spike, and giving ⌥⇥ its own path into the loop is a task of its own, the way internal/app was).
+// runSwitcher brings the whole switcher up: the panel and its appearance, the event loop, the
+// Accessibility observers, a thumbnail prefetcher, the ⌥⇥ tap, and — on the main thread — the AppKit
+// run loop that makes all of it composite. Settings come from the CFPreferences domain (P4.1).
 func runSwitcher() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	// Accessibility is mandatory; without it every part below degrades to nothing. Onboard and wait
+	// rather than starting a switcher that cannot switch (P4.3).
+	if !ensurePermissions(ctx) {
+		return 1
+	}
+
+	p := prefs.Load(darwin.Prefs{})
 
 	if err := darwin.CreatePanel(); err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
 		return 1
 	}
 	// P3.4's finding: a pre-create ApplyTheme cannot be replayed, so it is called here, right after
-	// CreatePanel and before the first show. Idempotent, no IPC.
+	// CreatePanel and before the first show. Idempotent, no IPC. SetAppearance first so a forced
+	// Light/Dark from prefs takes effect on this first apply.
+	darwin.SetAppearance(string(p.Appearance))
 	if err := darwin.ApplyTheme(); err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: theme: %v\n", err)
 	}
 
 	l := app.New(128)
 	l.OnError = func(err error) { fmt.Fprintf(os.Stderr, "gotab: %v\n", err) }
+	l.Rules = p.Rules() // the filter checkboxes from the settings window take effect here (P4.4)
 
-	pf := darwin.NewPrefetcher(64)
-	r := &panelRenderer{opts: core.LayoutOpts{Scale: 2, MaxCols: 7}, pf: pf}
+	pf := darwin.NewPrefetcher(p.ThumbnailCacheSize)
+	r := &panelRenderer{opts: p.LayoutOpts(), pf: pf}
 	l.OnState = r.onState
 
 	// Restyle on a Light/Dark flip. onChange runs on the main thread and ApplyTheme is non-blocking.
@@ -301,7 +457,7 @@ func runSwitcher() int {
 	// the tap thread already did (hotkey.h). Without the Accessibility grant the tap cannot install,
 	// and the scripted demo stands in so the render pipeline is still exercised.
 	hotkeyOK := false
-	if err := darwin.StartHotkey(func(g darwin.Gesture) { postGesture(l, g) }); err != nil {
+	if err := darwin.StartHotkey(p.HotkeyKeyCode, p.HotkeyModifiers, func(g darwin.Gesture) { postGesture(l, g) }); err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: hotkey unavailable (%v) — scripting a demo summon instead\n", err)
 		go demoDriver(ctx, l)
 	} else {
@@ -347,6 +503,13 @@ func (r *panelRenderer) onState(m *core.Model, o *core.Order, sel core.Selection
 		}
 		return
 	}
+
+	// Size the layout for the display the panel will actually land on — the one under the mouse,
+	// which gt_panel_show also uses — so the margin scales right and thumbnails are captured at the
+	// display's real backing scale (P4.4; this retires the hard-coded Scale: 2 of P4.1).
+	sw, sh, scale := darwin.ActiveScreen()
+	r.opts.Screen = core.Rect{W: sw, H: sh}
+	r.opts.Scale = scale
 
 	n := o.Len()
 	res := core.Layout(n, r.opts, r.frames[:0])
@@ -430,6 +593,88 @@ func demoDriver(ctx context.Context, l *app.Loop) {
 			l.Post(app.Event{Kind: app.Cycle, Dir: core.Forward})
 		}
 	}
+}
+
+// runSettings is `gotab -settings`: a native window over the same CFPreferences domain the CLI and
+// `defaults` use. Each control change is one "Key=Value" that prefs.Set parses and Save persists. It
+// is its own process — a running `gotab -switch` re-reads its settings only on the next launch.
+func runSettings() int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	store := darwin.Prefs{}
+	p := prefs.Load(store)
+
+	onAssign := func(kv string) {
+		if err := p.Set(kv); err != nil {
+			fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+			return
+		}
+		if err := p.Save(store); err != nil {
+			fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+			return
+		}
+		// The recorder sends HotkeyKeyCode then HotkeyModifiers; refresh the label once, after both.
+		if strings.HasPrefix(kv, "HotkeyModifiers") {
+			darwin.SettingsSetHotkey(darwin.HotkeyDisplay(p.HotkeyKeyCode, p.HotkeyModifiers))
+		}
+	}
+
+	v := darwin.SettingsValues{
+		ShowMinimized:  p.ShowMinimized,
+		ShowHidden:     p.ShowHidden,
+		ShowOtherSpace: p.ShowOtherSpace,
+		ActiveAppOnly:  p.ActiveAppOnly,
+		BlockedApps:    strings.Join(p.BlockedApps, ", "),
+		Appearance:     string(p.Appearance),
+		MaxColumns:     p.MaxColumns,
+		ThumbnailCache: p.ThumbnailCacheSize,
+		HotkeyDisplay:  darwin.HotkeyDisplay(p.HotkeyKeyCode, p.HotkeyModifiers),
+	}
+
+	darwin.OnSettingsClosed(darwin.StopRunLoop)
+	if err := darwin.OpenSettings(v, onAssign); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		return 1
+	}
+
+	go func() {
+		<-ctx.Done()
+		darwin.OnMain(darwin.CloseSettings)
+		darwin.StopRunLoop()
+	}()
+
+	fmt.Println("settings open — close the window or ^C to finish.")
+	darwin.RunLoop()
+	return 0
+}
+
+// runPrefs is `gotab -prefs`: with no arguments it prints the effective settings (defaults overlaid
+// with whatever the CFPreferences domain holds); with Key=Value arguments it applies them, writes the
+// whole record back, and prints the result. The domain is the same one `defaults read/write app.gotab`
+// addresses, so either tool can drive it until the settings UI (P4.2) exists.
+func runPrefs(assignments []string) int {
+	store := darwin.Prefs{}
+	p := prefs.Load(store)
+
+	if len(assignments) == 0 {
+		fmt.Printf("gotab %s — effective preferences:\n%s", version, p)
+		fmt.Fprintln(os.Stderr, "\nset one:  gotab -prefs MaxColumns=5 Appearance=dark")
+		return 0
+	}
+
+	for _, a := range assignments {
+		if err := p.Set(a); err != nil {
+			fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+			return 1
+		}
+	}
+	if err := p.Save(store); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		return 1
+	}
+	fmt.Printf("saved. effective preferences:\n%s", p)
+	return 0
 }
 
 // state packs the flags into one column. "-" is not "false", it is "no source knew".

@@ -109,4 +109,10 @@ void gt_panel_set_palette(gt_palette p);
 // Sets the NSVisualEffectView material (see the enum above). GT_MATERIAL_NONE disables vibrancy.
 void gt_panel_set_material(int32_t material);
 
+// The visible frame (points) and backing scale of the display the next gt_panel_show will use — the
+// one under the mouse, resolved by the same helper gt_panel_show uses so the two never disagree.
+// core.Layout needs these to scale its margin and to size thumbnails; feeding it a guessed scale was
+// P4.1's V6.8 assumption. Any out-param may be NULL; values are 0 (scale 1) if there is no screen.
+void gt_active_screen(int32_t *width_pt, int32_t *height_pt, int32_t *scale);
+
 #endif

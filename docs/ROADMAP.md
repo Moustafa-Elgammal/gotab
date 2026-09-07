@@ -226,16 +226,42 @@ is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slice
 
 ---
 
-## Phase 4 — Product
+## Phase 4 — Product (complete; V6.7/V6.9 verify on a machine)
 
-- [ ] **P4.1** Preferences — plist under the new bundle ID
-- [ ] **P4.2** Settings UI
-- [ ] **P4.3** Permissions onboarding — Accessibility + Screen Recording
-- [ ] **P4.4** Multi-monitor & Spaces
-- [ ] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh`. Note `scripts/build.sh` will need
-      `CGO_LDFLAGS_ALLOW` before it can link ScreenCaptureKit weakly → **V6.7**.
-      **`assumption`:** that a `minos 12.0` binary actually launches on macOS 12. P2.1 proved the binary
-      and its plist agree (D17); nothing here has a macOS 12 machine → **V6.7**
+- [x] **P4.1** Preferences — plist under the new bundle ID (D34). `internal/prefs` is the pure-Go
+      schema + defaults + `Load`/`Save`/`Set`; `darwin.Prefs` backs it with `CFPreferences` on the
+      `app.gotab` domain (interops with `defaults(1)`). `gotab -prefs [Key=Value…]` reads and writes
+      it; `-switch` reads the tile layout, the thumbnail cache bound, and the appearance from it.
+      (The filter fields and the hotkey chord were deferred here and are now wired — P4.4 and P4.2.)
+- [x] **P4.2** Settings UI (D35). `internal/platform/darwin/settings.{h,m,go}` build a native window
+      over the same CFPreferences domain — 4 filter checkboxes, a blocked-apps field, an Appearance
+      popup, Columns / Thumbnail-cache steppers, and a hotkey recorder. Every control change is one
+      `"Key=Value"` through `prefs.Set` → `Save`. `gt_hotkey_start` now takes a chord, so `HotkeyKeyCode`
+      / `HotkeyModifiers` are live end to end. `gotab -settings` opens it. (The filter checkboxes
+      `write` here and the loop now `reads` them — P4.4.)
+- [x] **P4.3** Permissions onboarding — Accessibility + Screen Recording (D36).
+      `internal/platform/darwin/permissions.{h,m,go}`: a modal `NSAlert` naming the missing grant and
+      what it is for, opening the right Privacy pane. `gotab -permissions` and `-switch` both gate on
+      Accessibility, then **poll** `CheckPermissions` until the grant appears — recovery with no
+      relaunch. From a shell (`stderrIsTTY`) it prints the deep links instead of the modal; with no
+      window server the modal is skipped entirely. `-check` prints the `x-apple.systempreferences:`
+      links. **The modal and the revoke→grant→recover loop need a human → V6.9.**
+- [x] **P4.4** Multi-monitor & Spaces (D37). Two connections the switcher had the parts for but never
+      made: **the filter is live** — `Loop.Rules` runs every window through `core.Filter` →
+      `Order.RebuildFrom` each rescan, so `ShowMinimized` / `ShowHidden` / `ShowOtherSpace` /
+      `BlockedApps` from the settings window take effect; and **the panel is sized for the display
+      under the mouse** (`darwin.ActiveScreen()` → `core.LayoutOpts.Screen`/`Scale`), retiring P4.1's
+      hard-coded `Scale: 2`. `Enumerate` fills `core.Window.Space`; `doRescan` refreshes
+      `Rules.CurrentSpace`. **Still inert:** `ActiveAppOnly` (needs the frontmost pid on `Summon`) and
+      the panel's own across-Spaces behaviour (P3.1's `collectionBehavior` → V6.2).
+- [x] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh` (D38). `build.sh` writes a full
+      Info.plist (`plutil -lint` clean, `LSUIElement`, split `CFBundleShortVersionString` /
+      `CFBundleVersion`), signs the *bundle* ad-hoc and verifies it. `install.sh` / `uninstall.sh`
+      honour `GOTAB_APPS`, verify the installed signature, and `--purge` also `tccutil reset`s the
+      grants — round-tripped against a temp dir. `cmd/gotab` with no flags runs the switcher from
+      inside `.app`, prints usage from a shell. The weak-SCK link landed earlier (`27cd840`).
+      **`assumption`:** a `minos 12.0` binary launching on macOS 12, and a first launch from
+      `/Applications` on a clean account (Gatekeeper on a quarantined copy) → **V6.7**.
 
 ---
 
@@ -267,9 +293,9 @@ coming back badly changes Phase 2/3 code rather than merely reporting on it.
 | **V6.4** | Thumbnail memory at realistic scale | 50-window cache at Retina resolution stays inside the stated bound; measured on `spike/procmem`'s **`IOSurface`** row, sampled at summon (D8: the resident figure decays within seconds) | — |
 | **V6.5** | `internal/platform` behaviour | the platform layer is a humble object and is **not** unit-tested (ARCHITECTURE.md). Verified instead by driving the built `.app`: enumerate → order → raise the window that was selected, on a machine with ≥ 20 windows across ≥ 2 apps | — |
 | **V6.6** | Phase 2/3 tests not written in place | tests for whatever Phase 2/3 grew that is pure enough to test — the C-shim boundary conversions above all — land in `internal/core`-style table tests; `scripts/check.sh` green | — |
-| **V6.7** | Ship the bundle | `./scripts/build.sh` produces a universal `build/GoTab.app` that launches from `/Applications` on a clean account, and `scripts/install.sh` / `uninstall.sh` round-trip. Includes the `CGO_LDFLAGS_ALLOW` fix for weak-linking ScreenCaptureKit | — |
+| **V6.7** | Ship the bundle (P4.5) | the bundle, its plist, the ad-hoc signature, the weak-SCK link, and the `install.sh`/`uninstall.sh` round-trip are all done and self-verified (D38). This is the machine half: `build/GoTab.app` launches from `/Applications` on a genuinely clean account (Gatekeeper allows a quarantined ad-hoc copy only after a right-click → Open, or notarization), and on a real macOS 12 host (`minos`/plist *agree*; a 12.0 binary *running* on 12.0 is untested — D17) | a machine |
 | **V6.8** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` still reports **0 allocs/op** for summon, cycle and dismiss after Phases 2–5 have wired real data through | — |
-| **V6.9** | Permissions onboarding | from a **revoked** state, the app explains which grant is missing and recovers without a relaunch loop. Both grants: Accessibility and Screen Recording | a human |
+| **V6.9** | Permissions onboarding (P4.3) | from a **revoked** state, `-switch` shows the alert, and granting in Settings brings the switcher up **without a relaunch** — the 750 ms poll picks it up. Both grants. The headless fallback and the poll are already exercised (D36); this is the modal + the human loop | a human |
 
 **A task contract goes in `docs/tasks/V6.N.md` before that task starts**, same as every other numbered
 task. They are deliberately not written yet: what V6.5 and V6.6 actually have to check depends on what
@@ -556,4 +582,80 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next: Phase 4 (Product) — P4.1, the preferences plist under the new bundle ID.** Or run the
   Phase 6 debts that are now cheap: V6.1 (hotkey latency) and V6.2 (panel over full-screen / across
   Spaces) both just need a human at the machine, and either coming back badly changes Phase 3 code.
+- `2026-09-07` — **P4.1 done — settings persist in the bundle-id plist (D34).** `internal/prefs` is
+  the pure-Go schema (`Prefs`, `Default()`, `Load`/`Save`/`Set`, `LayoutOpts()`/`Rules()`);
+  `internal/platform/darwin/prefs.{h,m,go}` back its `Reader`/`Writer` with `CFPreferencesCopyAppValue`
+  / `SetAppValue` on `kCFPreferencesCurrentApplication`. From `build/GoTab.app` that domain is
+  `app.gotab` and `defaults read app.gotab` shows the schema keys; under a bare `go build` it is the
+  binary's own name, so a dev build cannot scribble on the real prefs (the TCC identity rule again).
+  `gotab -prefs` prints the effective settings, `gotab -prefs MaxColumns=5 Appearance=dark` sets them.
+  `-switch` reads `MaxColumns`/`TileWidth`/`TileHeight`, `ThumbnailCacheSize`, and `Appearance` (a
+  forced Light/Dark via a new `darwin.SetAppearance` override in `theme.go`, no `theme.m` change).
+  **Two schema fields are inert until a later task:** the filter (`ShowMinimized` etc.) needs
+  `core.Rules` wired into `internal/app`'s loop, which never filters today — P4.4's or its own; the
+  hotkey chord needs `gt_hotkey_start` to take a keycode — P4.2's (rebinding is a settings-UI
+  feature). Round-trip and `defaults` interop verified; gate green, universal app builds.
+  **Next: P4.2 (Settings UI), or P4.3 (permissions onboarding — the one thing every path here has
+  needed a human for).** Or cash the V6.1/V6.2 Phase 0/3 debts.
+- `2026-09-07` — **P4.2 done — a native settings window, and the hotkey is rebindable (D35).**
+  `internal/platform/darwin/settings.{h,m,go}` build one fixed-size `NSWindow` — 4 filter checkboxes,
+  a blocked-apps text field, an Appearance popup, Columns / Thumbnail-cache steppers, a hotkey
+  recorder. Manual top-down frames, no Auto Layout. Every control funnels through one
+  `emit(key, value)` → `goSettingsAssign("Key=Value")` → `prefs.Set` → `Save`, so there is no
+  per-control marshalling and no second schema. `darwin` still does not import `internal/prefs`
+  (`SettingsValues` is primitives; `darwin.Prefs` implements the interfaces structurally).
+  `gt_hotkey_start` now takes `(keycode, modifiers)` — `g_chord_key`/`g_chord_mods` replace the
+  hardcoded ⌥Tab, the commit edge generalises to any modifier set — so `HotkeyKeyCode` /
+  `HotkeyModifiers` are live from `-prefs` and the recorder through to `-switch`'s `StartHotkey`.
+  `HotkeyDisplay` (`hotkey.go`) is the one chord formatter. `gotab -settings` opens the window on its
+  own run loop (Regular activation policy while open); it is its own process — a running `-switch`
+  re-reads prefs only on next launch. Smoke-tested: opens, exits 0 on close/^C; the `Key=Value` path
+  is verified through `-prefs`. The window's pixels and the recorder capturing a real chord are
+  V6.9 (a human).
+  **Next: P4.3 (permissions onboarding) — from a revoked state, explain which grant is missing and
+  recover without a relaunch loop.** Then P4.4 (multi-monitor & Spaces, which also wires the filter),
+  P4.5 (packaging). The V6.1/V6.2 human debts are still cheap and still worth doing first.
+- `2026-09-07` — **P4.3 done — onboarding explains the missing grant and recovers by polling (D36).**
+  `internal/platform/darwin/permissions.{h,m,go}`: a modal `NSAlert` names each missing grant, says
+  what it is for, and on "Open System Settings" opens the pane (and `CGRequestScreenCaptureAccess` for
+  the SR list row). `gotab -permissions` and `-switch` both call it, then poll `CheckPermissions`
+  every 750 ms until the grant appears — no relaunch; and macOS relaunching gotab itself on the AX
+  grant is fine, the fresh process passes the gate. `-switch` caps the wait at 5 min then quits with a
+  re-open hint; Screen Recording missing is a one-line warning and it runs on. Two guards that were
+  not optional: from a shell (`stderrIsTTY`) it prints the `x-apple.systempreferences:` deep links
+  instead of a focus-stealing modal, and with no window server (`[NSScreen screens] == 0`) the modal
+  is skipped so `runModal` cannot hang unkillably. `-check` gained the deep links. TTY path and the
+  poll verified via a pty; the modal and the full revoke→grant→recover loop are **V6.9**.
+  **Next: P4.4 (multi-monitor & Spaces) — it also wires `core.Rules` into the loop, closing P4.1/P4.2's
+  open filter item. Then P4.5 (packaging, `install.sh`).** V6.1/V6.2 remain the cheap human debts.
+- `2026-09-07` — **P4.4 done — the filter is live and the panel is sized for its display (D37).**
+  Two long-standing disconnects closed. **Filter:** `Loop.Rules` (from `Prefs.Rules()`) runs the
+  model through `core.Filter` → the new `core.Order.RebuildFrom` on every rescan, so `ShowMinimized`
+  / `ShowHidden` / `ShowOtherSpace` / `BlockedApps` from the settings window take effect;
+  `Enumerate` now fills `core.Window.Space` (one `SpacesOf` crossing) and `doRescan` refreshes
+  `Rules.CurrentSpace`. Rebuilding every pass is safe — `RebuildFrom` sorts by `FocusSeq` only, so a
+  no-op pass is byte-identical and `-watch`'s print-on-change (P2.7's MRU check) stays quiet.
+  **Display:** `darwin.ActiveScreen()` (the screen under the mouse, shared with `gt_panel_show`)
+  feeds `core.LayoutOpts.Screen`/`Scale`, retiring P4.1's `Scale: 2` guess. `Rebuild` and
+  `RebuildFrom` share `sortByFocus`. Gate green (`internal/core` suite unbroken by the refactor);
+  degraded paths (`-list -raw`, `-watch` with no grant) still fine. **Left inert:** `ActiveAppOnly`
+  (needs the frontmost pid on `Summon`) and the panel's own cross-Spaces behaviour (P3.1 → V6.2).
+  **Next: P4.5 — package the `.app`: `install.sh` / `uninstall.sh` round-trip, ad-hoc codesign,
+  verify the universal bundle. `build.sh` already does the weak-SCK link (this session).** Then Phase
+  5, or hand the V6.1/V6.2/V6.5/V6.9 human checklist to someone at a Mac.
+- `2026-09-07` — **P4.5 done — GoTab.app packages, installs, and uninstalls cleanly (D38). Phase 4 is
+  complete.** `build.sh` writes a full Info.plist (`plutil -lint` clean, `LSUIElement`, split
+  `CFBundleShortVersionString`=`0.1.0` / `CFBundleVersion`=`git describe`, `CFBundleInfoDictionaryVersion`),
+  signs the bundle ad-hoc and `codesign --verify --strict`s it. `install.sh` / `uninstall.sh` honour a
+  `GOTAB_APPS` prefix, verify the installed copy's signature, and `--purge` also `tccutil reset`s both
+  grants — round-tripped against a temp dir, everything came back clean. `cmd/gotab` with no flags
+  runs the switcher when the executable is inside `.app` (a Finder launch) and prints usage from a
+  shell. `spctl` rejects the ad-hoc bundle, which is expected — Gatekeeper only enforces that on a
+  quarantined (downloaded) copy; a locally built one runs. **V6.7 is now purely the machine half:** a
+  first launch on a clean account, and a real macOS 12 host.
+  **Next: Phase 5 (localization scaffold, VoiceOver, update mechanism) — all optional polish — or
+  stop here.** The switcher is feature-complete: `gotab -switch` enumerates, filters, orders, draws,
+  prefetches, restyles, and raises, driven by a configurable ⌥⇥, with a settings window, onboarding,
+  and an installer. What is left is Phase 5 polish and the V6 checklist a human runs on a Mac
+  (V6.1–V6.5, V6.7, V6.9).
 

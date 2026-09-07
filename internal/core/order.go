@@ -28,10 +28,27 @@ func (o *Order) Rebuild(m *Model) {
 	for i := range m.IDs {
 		rows = append(rows, i)
 	}
-	// Insertion sort rather than sort.Stable: sort.Stable takes an interface, and boxing a sorter
-	// that carries both slices escapes to the heap. That single allocation is the one thing this
-	// path may not do. n is the number of open windows — tens — so the quadratic term never
-	// approaches the cost of the allocation it avoids. Strict < is what makes it stable.
+	sortByFocus(m, rows)
+	o.Rows = rows
+}
+
+// RebuildFrom replaces the order with exactly the rows in `rows`, most recently focused first — the
+// output of the filter kernel (P1.3), so the presentation order holds only the windows the Rules
+// allow. Same structural-repair-only rule as Rebuild: call it when membership or a filter input (a
+// window minimized, the current Space changed) changed, never on a title or frame change. `rows` must
+// be valid indices into m; RebuildFrom trusts them and does not copy `rows` beyond appending it.
+func (o *Order) RebuildFrom(m *Model, rows []int) {
+	dst := append(o.Rows[:0], rows...)
+	sortByFocus(m, dst)
+	o.Rows = dst
+}
+
+// sortByFocus stable-sorts rows in place, most recently focused first. Insertion sort rather than
+// sort.Stable: sort.Stable takes an interface, and boxing a sorter that carries both slices escapes
+// to the heap — the one allocation this path may not do. n is the number of open windows (tens), so
+// the quadratic term never approaches the cost of the allocation it avoids. Strict < keeps it stable,
+// so Focus-0 ties keep their incoming order.
+func sortByFocus(m *Model, rows []int) {
 	for i := 1; i < len(rows); i++ {
 		row := rows[i]
 		focus := m.Focuses[row]
@@ -42,7 +59,6 @@ func (o *Order) Rebuild(m *Model) {
 		}
 		rows[j+1] = row
 	}
-	o.Rows = rows
 }
 
 // Promote moves row to the front and shifts everything that was ahead of it down one. It reports

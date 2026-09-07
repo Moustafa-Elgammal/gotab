@@ -46,12 +46,21 @@ type Loop struct {
 
 	// scratch and present are reused across rescans so a steady state allocates nothing. present
 	// maps a window to the generation that last saw it; comparing against gen is how windows that
-	// vanished are found without clearing a map every pass.
+	// vanished are found without clearing a map every pass. allowed is the filter kernel's output,
+	// also reused.
 	scratch []core.Window
 	present map[core.WindowID]uint64
+	allowed []int
 	gen     uint64
 
 	visible bool
+
+	// Rules is the filter (P1.3): which windows the switcher shows. Set it before Run; the zero value
+	// shows every switchable window on the current Space. doRescan refreshes Rules.CurrentSpace from
+	// the platform each pass — that field is runtime state, not a setting. Changing the rest of Rules
+	// after Run has started takes effect on the next rescan; a live settings integration would post a
+	// Rescan after doing so.
+	Rules core.Rules
 
 	// OnState is called on the loop goroutine after anything changes, with the state as it now
 	// stands. Nil until a renderer exists (P3.1). The callee must not retain or mutate what it is
@@ -79,6 +88,7 @@ func New(capacity int) *Loop {
 		rescan:  make(chan struct{}, 1),
 		scratch: make([]core.Window, 0, capacity),
 		present: make(map[core.WindowID]uint64, capacity),
+		allowed: make([]int, 0, capacity),
 	}
 }
 
@@ -169,8 +179,13 @@ func (l *Loop) handle(e Event) bool {
 //
 // The subtlety is that this runs on every notification and must not disturb MRU order. Upsert is
 // passed a zero FocusSeq, which it reads as "preserve what you have", so a window whose title changed
-// keeps its position — that is ALTTAB-LESSONS section 3's rule expressed as an argument value. The
-// order is rebuilt only when membership actually changed, because a rebuild IS a reorder.
+// keeps its position — that is ALTTAB-LESSONS section 3's rule expressed as an argument value.
+//
+// The order is rebuilt every pass now, because the filter's *inputs* change without the window set
+// changing — a window minimizes, the current Space flips — and the order must follow. That is not a
+// reorder in section 3's sense: RebuildFrom sorts by FocusSeq, which a title change does not touch,
+// so a pass where nothing filter-relevant moved produces the identical order and the renderer redraws
+// the same tiles.
 func (l *Loop) doRescan() {
 	l.gen++
 
@@ -186,11 +201,7 @@ func (l *Loop) doRescan() {
 		return
 	}
 
-	changed := false
 	for _, w := range l.scratch {
-		if _, known := l.model.Row(w.ID); !known {
-			changed = true
-		}
 		l.model.Upsert(w)
 		l.present[w.ID] = l.gen
 	}
@@ -202,15 +213,17 @@ func (l *Loop) doRescan() {
 		if l.present[id] != l.gen {
 			l.model.Remove(id)
 			delete(l.present, id)
-			changed = true
 		}
 	}
 
-	if changed {
-		// A structural repair, which section 3 does permit to reorder.
-		l.order.Rebuild(l.model)
-		l.sel.Reconcile(l.order, l.model)
-	}
+	// The Space the user is on is runtime state, not a setting — refresh it so the ShowOtherSpace
+	// rule has something to compare against. 0 (SkyLight unavailable) means "do not filter by Space",
+	// which core.Rules.Allows already handles.
+	l.Rules.CurrentSpace = darwin.CurrentSpace()
+
+	l.allowed = core.Filter(l.model, l.Rules, l.allowed)
+	l.order.RebuildFrom(l.model, l.allowed)
+	l.sel.Reconcile(l.order, l.model)
 	l.notify()
 }
 

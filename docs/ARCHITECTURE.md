@@ -26,17 +26,24 @@ assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
   internal/app                 event loop: the ONE goroutine that owns mutable state
         │
   internal/core   ◄── pure Go, zero cgo, zero macOS. All decisions live here.
-        │                      ordering · filtering · search · selection · tab groups
+        │                      ordering · filtering · search · selection · tab groups · layout
         │
-  internal/platform/darwin     cgo + Objective-C. All IPC, all AppKit, all bitmaps.
+  internal/prefs  ◄── pure Go. The settings schema; the store is behind a Reader/Writer.
+        │
+  internal/platform/darwin     cgo + Objective-C. All IPC, all AppKit, all bitmaps, the prefs store.
 ```
 
-`internal/core` is complete (Phase 1). `internal/platform/darwin` enumerates the switchable set,
-observes window events, queries Spaces, raises / minimizes / closes windows (Phase 2, D24–D27), draws
-the panel, prefetches thumbnails, tracks the appearance, and taps the ⌥⇥ hotkey (Phase 3, D28–D33).
-`internal/app` owns the event loop — one goroutine, no mutex (P2.7 / D22). `cmd/gotab -switch` is the
-switcher, end to end, on a live AppKit run loop. Nothing has run it on a real screen yet — an agent
-host has no window server — so the pixels and the granted hotkey round trip are Phase 6's (V6.1–V6.5).
+`internal/core` is complete (Phase 1) plus the P3.2 layout engine. `internal/platform/darwin`
+enumerates the switchable set (with each window's Space), observes window events, raises / minimizes /
+closes windows (Phase 2, D24–D27), draws the panel sized for its display, prefetches thumbnails,
+tracks the appearance, taps a configurable hotkey (Phase 3, D28–D33), reads/writes the CFPreferences
+domain, shows a native settings window, onboards missing permissions, and ships as a signed universal
+`.app` (Phase 4 complete, D34–D38). `internal/prefs` is the pure-Go settings schema. `internal/app`
+owns the event loop — one goroutine, no mutex (P2.7 / D22) — and it filters the window set through
+`core.Rules` (P4.4). `cmd/gotab` with no flags runs the switcher from inside `.app`; `-settings`,
+`-permissions`, `-prefs`, `-check`, `-watch` are the rest. Nothing has run any of it on a real screen
+— an agent host has no window server — so the pixels, the granted hotkey round trip, the settings
+window, the permissions modal, and a clean-account launch are Phase 6's (V6.1–V6.5, V6.7, V6.9).
 
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
