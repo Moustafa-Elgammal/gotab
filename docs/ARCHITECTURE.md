@@ -118,4 +118,5 @@ the summon path at all.
 
 Phase 2 is closed (D24–D27). It began serial and fanned out once the C surface was carved one file pair
 per task (PARALLEL-WORK.md); the platform layer now enumerates, observes, queries Spaces and acts on
-windows. **Phase 3 (UI) is serial** — one owner, shared panel and main thread. See [ROADMAP.md](ROADMAP.md).
+windows. **Phase 3 (UI) is in progress and fans out the same way** — `internal/platform/darwin/panel.h`
+is frozen, and P3.1–P3.4 own one file pair each against it. See [ROADMAP.md](ROADMAP.md).

@@ -4,10 +4,12 @@ How to parallelise this build without burning tokens or creating merge chaos.
 
 ## The one rule that decides everything
 
-**Fan out only where the work is genuinely independent.** In this project that is *Phase 1 and nothing
-else*. Phase 1 tasks are pure Go, share no state, touch no cgo, and each lands in its own file. Phases 2
-and 3 share the C shim and the main thread — parallel agents there produce conflicts that cost more to
-untangle than the work saved. **Phase 2/3 get one owner, working sequentially.**
+**Fan out only where the work is genuinely independent.** Phase 1 was independent by nature — pure Go,
+no shared state, one file per task. Phases 2 and 3 are independent only *after a carve*: the tasks share
+the C shim (Phase 2) or the panel (Phase 3), so one owner freezes the shared surface first, then each
+remaining task gets its own file pair and they fan out. Both carves happened (Phase 2: commit
+`7e7751e`; Phase 3: the `panel.h` freeze). **Un-carved, Phase 2/3 work is serial — the carve is the
+whole mechanism.**
 
 Spawning an agent costs a cold start: it re-derives context you already hold. That cost is worth paying
 for an isolated, well-specified task with a clear acceptance test. It is never worth paying to "have a
@@ -42,6 +44,25 @@ definition of done below:
   merge that lands minutes later serves that just as well.
 - **Wiring.** `internal/app/` and `cmd/gotab/` are shared by definition. Agents expose an API and
   nothing calls it until integration. An agent that has to edit a caller was scoped wrong.
+
+## Phase 3 fans out the same way, off `panel.h`
+
+Phase 3 is UI and was written down as serial, because P3.1/P3.3/P3.4 all reach the same `NSPanel` and
+the same content view. The carve that fixed Phase 2 fixes this too: **the integrator froze `panel.h`
+and shipped a compiling skeleton** (`panel.m`, `panel.go`, `core/layout.go`), so the three renderer
+tasks each own a file pair and call `panel.h`'s frozen functions rather than editing `panel.m`.
+
+| task | owns | codes against |
+|---|---|---|
+| P3.1 panel + renderer | `panel.m`, `panel.go` (implements the frozen `panel.h`) | `spike/panel`, `ImageRef` |
+| P3.2 layout engine | `internal/core/layout.go` | frozen `api.go` — pure Go, no cgo |
+| P3.3 thumbnails | `thumbnail.{h,m,go}` | `gt_panel_tile_layer` (P3.1), `Capture` (P2.6), `core.Cache` |
+| P3.4 theme | `theme.{h,m,go}` | `gt_panel_set_palette` / `gt_panel_set_material` (P3.1) |
+
+**Frozen for the duration:** `panel.h`, plus everything Phase 2 froze. P3.3 and P3.4 branch from a main
+where `panel.m` is still a skeleton — they compile and link against it, and the real P3.1 lands under
+them at integration. That is the "heavier merge" this fan-out trades for wall-clock; `ROADMAP.md`,
+`DECISIONS.md` and all wiring stay with the integrator exactly as in Phase 2.
 
 ## Worktrees
 

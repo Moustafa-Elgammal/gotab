@@ -180,14 +180,28 @@ close one. Nothing wires those into a summon path yet — that is Phase 3.
 
 ---
 
-## Phase 3 — UI (serial)
+## Phase 3 — UI (fans out off `panel.h`)
 
-- [ ] **P3.1** Panel + **single-view renderer** — AltTab has 53 NSView subclasses; we draw all tiles in one
-      view to keep the C→Go callback count near zero. Must render a tile with **no thumbnail yet** and
-      fill it in asynchronously — D12 makes that a launch requirement, not a refinement
-- [ ] **P3.2** Tile layout engine — pure Go computes frames, C only draws
-- [ ] **P3.3** Thumbnail rendering via CALayer contents
-- [ ] **P3.4** Theme / appearance / dark mode
+Written down as serial, then carved like Phase 2: the integrator froze
+`internal/platform/darwin/panel.h` and shipped a compiling skeleton (`panel.m`, `panel.go`,
+`internal/core/layout.go`), so the four tasks run in parallel — one file pair each — against that
+header. P3.3 and P3.4 branch from a main where `panel.m` is still a skeleton and the real P3.1 lands
+under them at integration. See PARALLEL-WORK.md for the ownership table.
+
+- [~] **P3.1** Panel + **single-view renderer** — `feat/P3.1`, owns `panel.m` / `panel.go`. AltTab has
+      53 NSView subclasses; we draw all tiles in one `drawRect:` and keep thumbnails in dumb CALayers
+      to keep the C→Go callback count near zero. Must render a tile with **no thumbnail yet** and fill
+      it in asynchronously — D12 makes that a launch requirement, not a refinement.
+- [~] **P3.2** Tile layout engine — `feat/P3.2`, owns `internal/core/layout.go`. Pure Go computes the
+      panel size and every tile frame; C only draws. Wraps to rows, min/max tile size, screen-scaled
+      margin, 0 allocs/op with a presized buffer.
+- [~] **P3.3** Thumbnail rendering via CALayer `contents` — `feat/P3.3`, owns `thumbnail.{h,m,go}`.
+      One capture goroutine (D26: SCK serialises), driven by `core.Cache` + P2.6's `Capture`, setting
+      each tile layer's `contents` after the panel is up. Holds every `ImageRef` it hands out and
+      releases on eviction.
+- [~] **P3.4** Theme / appearance / dark mode — `feat/P3.4`, owns `theme.{h,m,go}`. Reads the
+      effective appearance, pushes a `gt_palette` + material through P3.1's frozen setters, and
+      restyles on a Light/Dark switch without a relaunch.
 
 **`assumption` across Phase 3:** that the panel behaves over a full-screen app and across Spaces. The
 `collectionBehavior` flags are AltTab's prior art, not a measurement (D13), and full-screen is where
@@ -479,4 +493,16 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next session: Phase 3 (UI, serial) — P3.1, the panel + single-view renderer.** No P3 task has a
   contract in `docs/tasks/` yet; write P3.1's before starting it. Phase 3 is also where `cmd/gotab`
   finally runs a main run loop, which closes P2.3b's open half.
+- `2026-09-07` — **Phase 3 carved and fanned out.** Called serial by the earlier plan; carved instead,
+  the same move as Phase 2's `7e7751e`. The integrator froze `internal/platform/darwin/panel.h` (the
+  `gt_tile` / `gt_palette` shapes and every panel function) and shipped a compiling skeleton —
+  `panel.m` creates the real NSPanel/views from `spike/panel`'s proven code and stubs the rest,
+  `panel.go` does real tile marshalling, `internal/core/layout.go` is a single-row equal split. Four
+  contracts written (`docs/tasks/P3.1–P3.4.md`), four worktrees, four agents in parallel: **P3.1**
+  owns `panel.m`/`panel.go`, **P3.2** `core/layout.go`, **P3.3** `thumbnail.{h,m,go}`, **P3.4**
+  `theme.{h,m,go}`. P3.3/P3.4 branch from a main where `panel.m` is still the skeleton and link
+  against it; the real P3.1 lands under them at integration — the "heavier merge" this fan-out trades
+  for wall-clock. Gate green on the skeleton.
+  **Next: integrate the four branches** (P3.1 first — it is what P3.3/P3.4 assumed), then wire
+  `internal/app` → `core.Layout` → `darwin.ShowPanel` and give `cmd/gotab` a real run loop.
 
