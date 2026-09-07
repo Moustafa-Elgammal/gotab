@@ -180,18 +180,49 @@ close one. Nothing wires those into a summon path yet — that is Phase 3.
 
 ---
 
-## Phase 3 — UI (serial)
+## Phase 3 — UI (complete; on-screen verification is Phase 6's)
 
-- [ ] **P3.1** Panel + **single-view renderer** — AltTab has 53 NSView subclasses; we draw all tiles in one
-      view to keep the C→Go callback count near zero. Must render a tile with **no thumbnail yet** and
-      fill it in asynchronously — D12 makes that a launch requirement, not a refinement
-- [ ] **P3.2** Tile layout engine — pure Go computes frames, C only draws
-- [ ] **P3.3** Thumbnail rendering via CALayer contents
-- [ ] **P3.4** Theme / appearance / dark mode
+Written down as serial, then carved like Phase 2: the integrator froze
+`internal/platform/darwin/panel.h` and shipped a compiling skeleton (`panel.m`, `panel.go`,
+`internal/core/layout.go`), so the four tasks ran in parallel — one file pair each — against that
+header. P3.3 and P3.4 branched from a main where `panel.m` was still a skeleton; the real P3.1 landed
+under them at integration. See PARALLEL-WORK.md for the ownership table.
+
+**All five tasks are done (D28–D33).** `gotab -switch` is the switcher: an ⌥⇥ event tap summons the
+panel, ⌥ held with ⇥ cycles, releasing ⌥ raises the selection, Esc dismisses — behind it the loop
+enumerates, orders, lays out, draws, prefetches thumbnails and restyles with the appearance, on a live
+AppKit run loop. What is **not** done is seeing any of it on a real screen: an agent/CI host has no
+window server, so pixels and the granted hotkey round trip are verified only in Phase 6 (V6.1–V6.5).
+
+- [x] **P3.1** Panel + **single-view renderer** — `panel.m` / `panel.go` (D29). One flipped
+      `GTTileView` draws every tile in one `drawRect:`; thumbnails ride in dumb `CALayer` sublayers
+      that never call back. Placeholder art for a not-yet-captured tile (D12). Show vs update is a
+      real split (D13). Verified by in-process offscreen render; the window-server screenshot is
+      V6.2/V6.3.
+- [x] **P3.2** Tile layout engine — `internal/core/layout.go` (D28). Pure Go, integer arithmetic:
+      wraps to rows, clamps to a min/max tile size, scales the margin to the display, deterministic,
+      0 allocs/op with a presized buffer. Contract extended additively; `api.go` untouched.
+- [x] **P3.3** Thumbnail rendering via CALayer `contents` — `thumbnail.{h,m,go}` (D30). One capture
+      goroutine (D26: SCK serialises), driven by `core.Cache` + `Capture`, setting each tile layer's
+      `contents` through `OnMain`. Holds every `ImageRef` and releases it on eviction or `Stop`. The
+      thumbnail-actually-appears check is V6.4 (needs the Screen Recording grant).
+- [x] **P3.4** Theme / appearance / dark mode — `theme.{h,m,go}` (D31). Reads the effective
+      appearance (`-bestMatchFromAppearancesWithNames:`, not `AppleInterfaceStyle`), pushes a
+      `gt_palette` + HUD material through P3.1's frozen setters, and restyles on a KVO flip. The
+      integrator must call `ApplyTheme()` right after `CreatePanel()` — `runSwitcher` does.
+- [x] **P3.5** Hotkey → loop — `hotkey.{h,m,go}` + the tap wiring in `cmd/gotab` (D33). A session
+      `CGEventTap` on its own thread recognises ⌥+Tab / ⌥+⇧+Tab / Option-release / Esc, swallows the
+      switcher's chord and its keyup, ignores autorepeat, and re-enables on
+      `kCGEventTapDisabledByTimeout`. The tap thread decides summon-vs-cycle, so `postGesture` is a
+      stateless switch into `Loop.Post`; `Loop.Activate` raises. Without the grant `StartHotkey`
+      returns `ErrNotTrusted` and `-switch` falls back to the scripted demo.
+      **`assumption`:** callback latency < 5 ms, and the first crossing on the tap thread → **V6.1**;
+      the granted round trip → **V6.5**.
 
 **`assumption` across Phase 3:** that the panel behaves over a full-screen app and across Spaces. The
 `collectionBehavior` flags are AltTab's prior art, not a measurement (D13), and full-screen is where
-switchers most often fail → **V6.2**
+switchers most often fail → **V6.2**. And that `panelRenderer.onState`'s per-state-change allocation
+is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slices → **V6.8**.
 
 ---
 
@@ -479,4 +510,50 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next session: Phase 3 (UI, serial) — P3.1, the panel + single-view renderer.** No P3 task has a
   contract in `docs/tasks/` yet; write P3.1's before starting it. Phase 3 is also where `cmd/gotab`
   finally runs a main run loop, which closes P2.3b's open half.
+- `2026-09-07` — **Phase 3 carved and fanned out.** Called serial by the earlier plan; carved instead,
+  the same move as Phase 2's `7e7751e`. The integrator froze `internal/platform/darwin/panel.h` (the
+  `gt_tile` / `gt_palette` shapes and every panel function) and shipped a compiling skeleton —
+  `panel.m` creates the real NSPanel/views from `spike/panel`'s proven code and stubs the rest,
+  `panel.go` does real tile marshalling, `internal/core/layout.go` is a single-row equal split. Four
+  contracts written (`docs/tasks/P3.1–P3.4.md`), four worktrees, four agents in parallel: **P3.1**
+  owns `panel.m`/`panel.go`, **P3.2** `core/layout.go`, **P3.3** `thumbnail.{h,m,go}`, **P3.4**
+  `theme.{h,m,go}`. P3.3/P3.4 branch from a main where `panel.m` is still the skeleton and link
+  against it; the real P3.1 lands under them at integration — the "heavier merge" this fan-out trades
+  for wall-clock. Gate green on the skeleton.
+  **Next: integrate the four branches** (P3.1 first — it is what P3.3/P3.4 assumed), then wire
+  `internal/app` → `core.Layout` → `darwin.ShowPanel` and give `cmd/gotab` a real run loop.
+- `2026-09-07` — **Phase 3 rendering landed and wired (D28–D32).** All four agents came back green
+  against the frozen `panel.h`; the "heavier merge" the max fan-out traded for was in fact clean —
+  P3.2 touched only `layout.go`, P3.3/P3.4 added new file pairs, and P3.1's real `panel.m` slid under
+  them with no conflict. Merged in order P3.2 → P3.3 → P3.4 → P3.1.
+  **P3.2 (D28):** `core.Layout` — wrap, min/max clamp, display-scaled margin, deterministic,
+  0-alloc; contract extended by adding fields only. **P3.1 (D29):** one flipped `GTTileView` draws
+  every tile, thumbnails in dumb CALayers, placeholder for a not-yet-captured tile, show/update
+  split; verified by in-process offscreen render (no grant needed), window-server screenshot is
+  V6.2/V6.3. **P3.3 (D30):** one-goroutine `Prefetcher` drives `core.Cache` + `Capture`, owns and
+  releases every `ImageRef`; the thumbnail-appears / `LiveImages` checks need the Screen Recording
+  grant → V6.4. **P3.4 (D31):** palette + HUD vibrancy from the effective appearance, KVO restyle;
+  integrator calls `ApplyTheme` right after `CreatePanel`.
+  **Integration (D32):** `runloop.{h,m,go}` (`CFRunLoopRun`, not `-[NSApp run]`), a `panelRenderer`
+  on `Loop.OnState`, `Loop.Activate` now calls `darwin.Raise`. `gotab -switch` runs the whole
+  pipeline on a live AppKit loop and scripts one summon — **P2.3b's open half closes here**, since
+  the main loop now delivers `NSWorkspace` notifications. The gate gained `go build ./...` (a missing
+  `-framework` slipped `vet`+`test`; P3.3/P3.4 both hit it with QuartzCore).
+  **Next: P3.5 — route the ⌥⇥ hotkey (P0.2's spike) into `Loop.Post`.** That is the last thing
+  between `-switch`'s scripted demo and a switcher a person can use. Then V6.2/V6.3 put it on a real
+  screen.
+- `2026-09-07` — **P3.5 done — the hotkey is wired, and Phase 3 is complete (D33).**
+  `hotkey.{h,m,go}` install a session `CGEventTap` at the queue head on its own thread (the
+  `observe.m` pattern, for the same reason: a keystroke must not queue behind a panel draw). The tap
+  thread tracks the gesture — first ⌥+Tab of a hold → `SUMMON_*`, later ones → `CYCLE_*`,
+  Option-release → `ACTIVATE` if armed, Esc → `DISMISS` — so `cmd/gotab`'s `postGesture` is a
+  stateless switch into `Loop.Post`. ⌥+Tab and its keyup are swallowed, autorepeat is dropped,
+  `kCGEventTapDisabledByTimeout` re-enables. Without the Accessibility grant `StartHotkey` returns
+  `ErrNotTrusted` and `-switch` falls back to the scripted demo — smoke-tested, clean SIGINT exit.
+  **The switcher now switches** (`Loop.Activate` → `darwin.Raise`), but only the no-grant path is
+  reachable from here: the tap seeing a real ⌥⇥, the summon→cycle→raise round trip, and the < 5 ms
+  callback budget are all **V6.1 / V6.5**, needing the grant and a human.
+  **Next: Phase 4 (Product) — P4.1, the preferences plist under the new bundle ID.** Or run the
+  Phase 6 debts that are now cheap: V6.1 (hotkey latency) and V6.2 (panel over full-screen / across
+  Spaces) both just need a human at the machine, and either coming back badly changes Phase 3 code.
 

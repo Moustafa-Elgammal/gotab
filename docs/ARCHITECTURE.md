@@ -32,10 +32,11 @@ assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
 ```
 
 `internal/core` is complete (Phase 1). `internal/platform/darwin` enumerates the switchable set,
-observes window events, queries Spaces, and raises / minimizes / closes windows (Phase 2, D24–D27).
-`internal/app` owns the event loop — one goroutine, no mutex (P2.7 / D22). `cmd/gotab` still only
-drives `-check` / `-list` / `-watch`: no panel and no hotkey, and it runs no main run loop yet, so the
-diagram's top row is Phase 3's.
+observes window events, queries Spaces, raises / minimizes / closes windows (Phase 2, D24–D27), draws
+the panel, prefetches thumbnails, tracks the appearance, and taps the ⌥⇥ hotkey (Phase 3, D28–D33).
+`internal/app` owns the event loop — one goroutine, no mutex (P2.7 / D22). `cmd/gotab -switch` is the
+switcher, end to end, on a live AppKit run loop. Nothing has run it on a real screen yet — an agent
+host has no window server — so the pixels and the granted hotkey round trip are Phase 6's (V6.1–V6.5).
 
 **The dependency arrow never reverses.** `core` must never import `platform`. `core` compiles and tests on
 any OS, which is what makes it fast to develop and cheap to fan out across agents.
@@ -116,6 +117,9 @@ code without a number and is carried as an explicit assumption into V6.1. What P
 where the 100 ms summon budget goes: on data, not on pixels, and not on capture, which cannot happen on
 the summon path at all.
 
-Phase 2 is closed (D24–D27). It began serial and fanned out once the C surface was carved one file pair
-per task (PARALLEL-WORK.md); the platform layer now enumerates, observes, queries Spaces and acts on
-windows. **Phase 3 (UI) is serial** — one owner, shared panel and main thread. See [ROADMAP.md](ROADMAP.md).
+Phases 2 and 3 both began "serial" and both fanned out once their shared surface was frozen — the C
+shim for Phase 2 (`7e7751e`), `panel.h` for Phase 3. Both are closed: Phase 2 in D24–D27, Phase 3 in
+D28–D33. `gotab -switch` is the switcher — ⌥⇥ tap → enumerate → order → lay out → draw → prefetch →
+restyle → raise, on a live run loop. **The only Phase 3 debt is on-screen verification** (V6.1–V6.5):
+an agent host has no window server, so the pixels and the granted hotkey round trip are unseen, and a
+bad result there sends work back into Phase 3. Next is Phase 4 (Product). See [ROADMAP.md](ROADMAP.md).
