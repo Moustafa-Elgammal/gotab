@@ -241,7 +241,13 @@ is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slice
       `"Key=Value"` through `prefs.Set` → `Save`. `gt_hotkey_start` now takes a chord, so `HotkeyKeyCode`
       / `HotkeyModifiers` are live end to end. `gotab -settings` opens it. The filter checkboxes
       **write** but the loop still does not **read** them → P4.4.
-- [ ] **P4.3** Permissions onboarding — Accessibility + Screen Recording
+- [x] **P4.3** Permissions onboarding — Accessibility + Screen Recording (D36).
+      `internal/platform/darwin/permissions.{h,m,go}`: a modal `NSAlert` naming the missing grant and
+      what it is for, opening the right Privacy pane. `gotab -permissions` and `-switch` both gate on
+      Accessibility, then **poll** `CheckPermissions` until the grant appears — recovery with no
+      relaunch. From a shell (`stderrIsTTY`) it prints the deep links instead of the modal; with no
+      window server the modal is skipped entirely. `-check` prints the `x-apple.systempreferences:`
+      links. **The modal and the revoke→grant→recover loop need a human → V6.9.**
 - [ ] **P4.4** Multi-monitor & Spaces
 - [ ] **P4.5** `.app` bundle packaging, ad-hoc codesign, `install.sh`. Note `scripts/build.sh` will need
       `CGO_LDFLAGS_ALLOW` before it can link ScreenCaptureKit weakly → **V6.7**.
@@ -280,7 +286,7 @@ coming back badly changes Phase 2/3 code rather than merely reporting on it.
 | **V6.6** | Phase 2/3 tests not written in place | tests for whatever Phase 2/3 grew that is pure enough to test — the C-shim boundary conversions above all — land in `internal/core`-style table tests; `scripts/check.sh` green | — |
 | **V6.7** | Ship the bundle | `./scripts/build.sh` produces a universal `build/GoTab.app` that launches from `/Applications` on a clean account, and `scripts/install.sh` / `uninstall.sh` round-trip. Includes the `CGO_LDFLAGS_ALLOW` fix for weak-linking ScreenCaptureKit | — |
 | **V6.8** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` still reports **0 allocs/op** for summon, cycle and dismiss after Phases 2–5 have wired real data through | — |
-| **V6.9** | Permissions onboarding | from a **revoked** state, the app explains which grant is missing and recovers without a relaunch loop. Both grants: Accessibility and Screen Recording | a human |
+| **V6.9** | Permissions onboarding (P4.3) | from a **revoked** state, `-switch` shows the alert, and granting in Settings brings the switcher up **without a relaunch** — the 750 ms poll picks it up. Both grants. The headless fallback and the poll are already exercised (D36); this is the modal + the human loop | a human |
 
 **A task contract goes in `docs/tasks/V6.N.md` before that task starts**, same as every other numbered
 task. They are deliberately not written yet: what V6.5 and V6.6 actually have to check depends on what
@@ -600,4 +606,17 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next: P4.3 (permissions onboarding) — from a revoked state, explain which grant is missing and
   recover without a relaunch loop.** Then P4.4 (multi-monitor & Spaces, which also wires the filter),
   P4.5 (packaging). The V6.1/V6.2 human debts are still cheap and still worth doing first.
+- `2026-09-07` — **P4.3 done — onboarding explains the missing grant and recovers by polling (D36).**
+  `internal/platform/darwin/permissions.{h,m,go}`: a modal `NSAlert` names each missing grant, says
+  what it is for, and on "Open System Settings" opens the pane (and `CGRequestScreenCaptureAccess` for
+  the SR list row). `gotab -permissions` and `-switch` both call it, then poll `CheckPermissions`
+  every 750 ms until the grant appears — no relaunch; and macOS relaunching gotab itself on the AX
+  grant is fine, the fresh process passes the gate. `-switch` caps the wait at 5 min then quits with a
+  re-open hint; Screen Recording missing is a one-line warning and it runs on. Two guards that were
+  not optional: from a shell (`stderrIsTTY`) it prints the `x-apple.systempreferences:` deep links
+  instead of a focus-stealing modal, and with no window server (`[NSScreen screens] == 0`) the modal
+  is skipped so `runModal` cannot hang unkillably. `-check` gained the deep links. TTY path and the
+  poll verified via a pty; the modal and the full revoke→grant→recover loop are **V6.9**.
+  **Next: P4.4 (multi-monitor & Spaces) — it also wires `core.Rules` into the loop, closing P4.1/P4.2's
+  open filter item. Then P4.5 (packaging, `install.sh`).** V6.1/V6.2 remain the cheap human debts.
 

@@ -1269,3 +1269,34 @@ does not resize, so a stack view earns nothing). `gotab -settings` opens it on i
 **Still not wired:** the filter checkboxes **write** `ShowMinimized` etc., but `internal/app`'s loop
 still does not **read** `core.Rules` — P4.1's open item, and P4.4's to close (Spaces touch the same
 code). `TileWidth`/`TileHeight` stay CLI-only (`0 = auto` reads badly as a stepper).
+
+---
+
+## D36 · P4.3: onboarding is an alert plus a poll, and it must survive being run headless — 2026-09-07
+
+`internal/platform/darwin/permissions.{h,m,go}` handle a missing grant: a modal `NSAlert` names it,
+says what it is for, and on "Open System Settings" opens the relevant Privacy pane — and, for Screen
+Recording, calls `CGRequestScreenCaptureAccess` so the app gets a row in that list. `gotab
+-permissions` and `gotab -switch` both call it and then **poll** `CheckPermissions` every 750 ms
+until the grant appears.
+
+- **Recovery is a poll, not an observer.** TCC exposes no "grant changed" signal worth building on; a
+  poll on `gt_trusted()` / `gt_can_record()` picks a Settings toggle up within ~1 s. `-switch` gates
+  on Accessibility (without it nothing below works), caps the wait at 5 minutes, then quits with a
+  re-open hint; Screen Recording missing is a one-line warning and it runs on. macOS relaunching
+  gotab itself on the Accessibility grant is not a "relaunch loop" — the fresh process passes the
+  gate and never prompts.
+- **`[NSAlert runModal]` cannot be interrupted.** Run with no window server it blocks forever and
+  ignores SIGINT — a first cut hung under `kill -INT` and needed `kill -9`. So `gt_permissions_prompt`
+  checks `[[NSScreen screens] count] == 0` first and returns `GT_ERR_INTERNAL`; `PromptPermissions`
+  reports that as `shown == false` and the caller prints the deep links instead.
+- **Modal from Finder, text from a shell.** `stderrIsTTY()` decides. A `.app` from Finder has no
+  controlling terminal, so the alert is the only channel; from a shell an alert stealing focus for
+  text the user could read inline is worse, so the TTY path prints the `x-apple.systempreferences:`
+  links and opens the pane directly. Verified via a pty: prints, opens the pane, enters the poll, ^C
+  exits cleanly.
+- **No new window.** An `NSAlert` needs no controller, no layout, no in-window timer. The onboarding
+  "UI" is the alert plus the System Settings pane — the native pattern, and the least code.
+
+**V6.9** is the human half: the modal itself, and a full revoke → start `-switch` → grant in Settings
+→ switcher comes up without relaunching. The poll and the headless fallback are exercised here.

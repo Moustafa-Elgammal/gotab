@@ -44,6 +44,7 @@ func main() {
 	switchMode := flag.Bool("switch", false, "run the switcher: ⌥⇥ summons, ⌥ held cycles, release raises; ^C to stop")
 	prefsMode := flag.Bool("prefs", false, "print effective preferences; with Key=Value args, set them and exit")
 	settingsMode := flag.Bool("settings", false, "open the settings window")
+	permMode := flag.Bool("permissions", false, "check the grants, explain any that are missing, and wait for them")
 	flag.Parse()
 
 	if *showVersion {
@@ -62,6 +63,9 @@ func main() {
 	if *check {
 		os.Exit(reportPermissions())
 	}
+	if *permMode {
+		os.Exit(runPermissions())
+	}
 	if *list || *raw || *axOnly {
 		os.Exit(listWindows(*raw, *axOnly))
 	}
@@ -78,7 +82,7 @@ func main() {
 		os.Exit(runSwitcher())
 	}
 
-	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch for the switcher, -settings for the window, -watch, -prefs or -check.\n", version)
+	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch, -settings, -permissions, -watch, -prefs or -check.\n", version)
 	os.Exit(1)
 }
 
@@ -96,9 +100,126 @@ func reportPermissions() int {
 	// The grant belongs to the *responsible* process, so running this under `go run` reports the
 	// terminal's permissions rather than gotab's. Saying so here saves the next person the hour
 	// ALTTAB-LESSONS section 5 documents.
-	fmt.Fprintln(os.Stderr, "\nGrant these in System Settings > Privacy & Security.")
+	fmt.Fprintln(os.Stderr, "\nGrant these in System Settings > Privacy & Security:")
+	if !p.Accessibility {
+		fmt.Fprintln(os.Stderr, "  "+paneAccessibility)
+	}
+	if !p.ScreenRecording {
+		fmt.Fprintln(os.Stderr, "  "+paneScreenRecord)
+	}
+	fmt.Fprintln(os.Stderr, "`gotab -permissions` walks you through it and waits for the grant.")
 	fmt.Fprintln(os.Stderr, "Run from a built .app: under `go run` these report the terminal's grants, not gotab's.")
 	return 1
+}
+
+// stderrIsTTY reports whether stderr is a terminal. gotab launched from Finder has no terminal, and a
+// modal alert is the only channel; from a shell the alert would steal focus for information the user
+// can read inline, so the terminal path prints instead.
+func stderrIsTTY() bool {
+	fi, err := os.Stderr.Stat()
+	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+}
+
+const (
+	paneAccessibility = "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"
+	paneScreenRecord  = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
+)
+
+// promptForGrants asks the user to grant what is missing. From Finder (no TTY, window server present)
+// it is a modal alert whose "Open System Settings" opens the pane; from a shell, or when there is no
+// window server, it is a printed explanation plus opening the pane directly. Returns whether to
+// proceed to the wait loop — false only if the user quit the modal.
+func promptForGrants(needAX, needSR bool) bool {
+	if !stderrIsTTY() {
+		if shown, proceed := darwin.PromptPermissions(needAX, needSR); shown {
+			return proceed
+		}
+		// No window server — fall through to the printed path.
+	}
+	fmt.Fprintln(os.Stderr, "gotab: grant the missing permission in System Settings › Privacy & Security:")
+	if needAX {
+		fmt.Fprintln(os.Stderr, "  Accessibility     "+paneAccessibility)
+	}
+	if needSR {
+		fmt.Fprintln(os.Stderr, "  Screen Recording  "+paneScreenRecord)
+	}
+	if needAX {
+		darwin.OpenPrivacyPane("accessibility")
+	} else {
+		darwin.OpenPrivacyPane("screen-recording")
+	}
+	return true
+}
+
+// runPermissions is `gotab -permissions`: report the grants, and for any that are missing prompt,
+// open System Settings, and wait — recovering the moment the grant appears, no relaunch. ^C stops the
+// wait.
+func runPermissions() int {
+	p := darwin.CheckPermissions()
+	fmt.Printf("gotab %s\n", version)
+	fmt.Printf("  Accessibility     %s\n", grant(p.Accessibility))
+	fmt.Printf("  Screen Recording  %s\n", grant(p.ScreenRecording))
+	if p.OK() {
+		fmt.Println("\nboth grants are in place.")
+		return 0
+	}
+
+	if !promptForGrants(!p.Accessibility, !p.ScreenRecording) {
+		return 1 // user chose Quit
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	fmt.Println("\nwaiting for the grant(s) — toggle them in System Settings; ^C to stop.")
+	for last := p; ctx.Err() == nil; {
+		time.Sleep(750 * time.Millisecond)
+		q := darwin.CheckPermissions()
+		if q.Accessibility && !last.Accessibility {
+			fmt.Println("  Accessibility granted.")
+		}
+		if q.ScreenRecording && !last.ScreenRecording {
+			fmt.Println("  Screen Recording granted.")
+		}
+		last = q
+		if q.OK() {
+			fmt.Println("done — both grants are in place.")
+			return 0
+		}
+	}
+	return 1
+}
+
+// ensurePermissions gates the switcher on the grants it needs. Accessibility is mandatory — without it
+// gotab cannot enumerate, raise, or tap the hotkey. Screen Recording is optional (a warning, then it
+// runs degraded). A missing mandatory grant is prompted, System Settings is opened, and gotab polls
+// until it appears — recovering without a relaunch. macOS may relaunch gotab itself on an
+// Accessibility grant; the fresh process then passes here and never prompts.
+func ensurePermissions(ctx context.Context) bool {
+	p := darwin.CheckPermissions()
+	if p.Accessibility {
+		if !p.ScreenRecording {
+			fmt.Fprintln(os.Stderr, "gotab: Screen Recording is off — no thumbnails, and no titles for other apps.")
+		}
+		return true
+	}
+
+	if !promptForGrants(true, !p.ScreenRecording) {
+		return false // user chose Quit
+	}
+
+	fmt.Fprintln(os.Stderr, "gotab: waiting for Accessibility — grant it in System Settings; ^C to stop.")
+	deadline := time.Now().Add(5 * time.Minute)
+	for ctx.Err() == nil && time.Now().Before(deadline) {
+		time.Sleep(750 * time.Millisecond)
+		if darwin.CheckPermissions().Accessibility {
+			fmt.Fprintln(os.Stderr, "gotab: Accessibility granted — starting.")
+			return true
+		}
+	}
+	if ctx.Err() == nil {
+		fmt.Fprintln(os.Stderr, "gotab: Accessibility still not granted — quitting. Re-open GoTab after granting it.")
+	}
+	return false
 }
 
 // listWindows drives the enumeration and prints what came back. This is what verification looks like
@@ -275,6 +396,12 @@ func watchWindows() int {
 func runSwitcher() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+
+	// Accessibility is mandatory; without it every part below degrades to nothing. Onboard and wait
+	// rather than starting a switcher that cannot switch (P4.3).
+	if !ensurePermissions(ctx) {
+		return 1
+	}
 
 	p := prefs.Load(darwin.Prefs{})
 
