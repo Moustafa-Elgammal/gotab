@@ -26,11 +26,21 @@ echo "==> Building ${APP_NAME} ${VERSION}"
 rm -rf "$OUT"
 mkdir -p "$OUT/Contents/MacOS" "$OUT/Contents/Resources"
 
-# Universal binary so the same .app runs on Intel and Apple Silicon.
+# ScreenCaptureKit must be linked WEAKLY, and only the shipped binary does it.
+#
+# SCK arrives in macOS 12.3 while MIN_MACOS is 12.0 (D17), so a hard link makes dyld refuse to launch
+# the app at all on 12.0-12.2 -- not a missing thumbnail, a bundle that does not start. Weak linking
+# resolves the framework's classes to NULL there instead, which capture.m reports as GT_ERR_UNAVAILABLE.
+#
+# cgo rejects -Wl,-weak_framework as an invalid LDFLAG unless CGO_LDFLAGS_ALLOW permits it, and
+# exporting that for every plain `go build` would mean the gate could not run without it. So capture.go
+# puts the weak link behind the `gotab_weak_sck` build tag and cgo evaluates the tag before the
+# allowlist: a tagless build links hard and needs no environment, and only this script asks for both.
 build_arch() {
   echo "    compiling ${1}"
   CGO_ENABLED=1 GOARCH="$1" \
-    go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" \
+    CGO_LDFLAGS_ALLOW='-Wl,-weak_framework.*' \
+    go build -trimpath -tags gotab_weak_sck -ldflags "-s -w -X main.version=${VERSION}" \
     -o "build/${APP_NAME}-${1}" ./cmd/gotab
 }
 build_arch arm64
