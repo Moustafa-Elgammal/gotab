@@ -47,11 +47,13 @@ type Loop struct {
 	// scratch and present are reused across rescans so a steady state allocates nothing. present
 	// maps a window to the generation that last saw it; comparing against gen is how windows that
 	// vanished are found without clearing a map every pass. allowed is the filter kernel's output,
-	// also reused.
-	scratch []core.Window
-	present map[core.WindowID]uint64
-	allowed []int
-	gen     uint64
+	// also reused. pidAlive memoizes the P7.2 liveness check within one rescan so a dead app's N
+	// windows cost one syscall, not N; it is cleared, never reallocated, each pass.
+	scratch  []core.Window
+	present  map[core.WindowID]uint64
+	allowed  []int
+	pidAlive map[core.AppID]bool
+	gen      uint64
 
 	visible bool
 
@@ -81,14 +83,15 @@ const eventQueue = 256
 // number only decides how many enumerations happen before the buffers settle.
 func New(capacity int) *Loop {
 	return &Loop{
-		model:   core.NewModel(capacity),
-		order:   core.NewOrder(capacity),
-		enum:    darwin.NewEnumerator(),
-		events:  make(chan Event, eventQueue),
-		rescan:  make(chan struct{}, 1),
-		scratch: make([]core.Window, 0, capacity),
-		present: make(map[core.WindowID]uint64, capacity),
-		allowed: make([]int, 0, capacity),
+		model:    core.NewModel(capacity),
+		order:    core.NewOrder(capacity),
+		enum:     darwin.NewEnumerator(),
+		events:   make(chan Event, eventQueue),
+		rescan:   make(chan struct{}, 1),
+		scratch:  make([]core.Window, 0, capacity),
+		present:  make(map[core.WindowID]uint64, capacity),
+		allowed:  make([]int, 0, capacity),
+		pidAlive: make(map[core.AppID]bool, capacity),
 	}
 }
 
@@ -206,11 +209,32 @@ func (l *Loop) doRescan() {
 		l.present[w.ID] = l.gen
 	}
 
-	// Backwards, because Remove is swap-with-last: the row that moves into i has already been
-	// visited, and i only ever decreases, so nothing is skipped and nothing is read out of range.
+	// Two ways a window leaves the model, both handled here, backwards because Remove is
+	// swap-with-last: the row that moves into i has already been visited, and i only ever decreases,
+	// so nothing is skipped and nothing is read out of range. At most one Remove per iteration.
+	clear(l.pidAlive)
 	for i := l.model.Len() - 1; i >= 0; i-- {
 		id := l.model.IDs[i]
+		// (1) Neither source reported it this pass. A window closed with ⌘W is gone from both
+		// kAXWindowsAttribute and CGWindowList, so it is absent from l.scratch and its present entry
+		// stalls at the previous generation. This is the path the roadmap notes "already is" — it
+		// is, and it covers the ordinary close.
 		if l.present[id] != l.gen {
+			l.model.Remove(id)
+			delete(l.present, id)
+			continue
+		}
+		// (2) It is still being enumerated, but its owning process has exited (D46): a stale
+		// CoreGraphics entry, or a cg-only window the join recovered whose app is already gone. The
+		// not-seen check cannot catch this because the window is still in the list. One syscall.Kill
+		// per distinct pid — a dead app's windows share it, hence pidAlive.
+		pid := l.model.Apps[i]
+		alive, known := l.pidAlive[pid]
+		if !known {
+			alive = darwin.ProcessAlive(int(pid))
+			l.pidAlive[pid] = alive
+		}
+		if !alive {
 			l.model.Remove(id)
 			delete(l.present, id)
 		}
