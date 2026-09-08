@@ -39,10 +39,12 @@ enum {
 // the switch happened. A hidden application (Cmd-H) is unhidden for the same reason.
 //
 // If the id will not resolve to an AXUIElement -- a window the enumeration join offered because
-// Accessibility could not see it, usually on another Space -- but its owning application is still
-// running, that application is activated and GT_OK is returned (P7.1, D46): the exact window is not
-// reordered, but the app the user picked comes forward. GT_ERR_NO_WINDOW is returned only when the
-// owning process is gone as well, which is the signal to prune the window from the model.
+// Accessibility could not see it, usually on another Space -- two fallbacks apply in order. First,
+// if SkyLight can name that Space and switch to it (P7.3, optional/private, may be unavailable), the
+// resolve is retried and the real window is raised. Failing that, if the owning application is still
+// running it is activated and GT_OK returned (P7.1, D46): the exact window is not reordered, but the
+// app the user picked comes forward. GT_ERR_NO_WINDOW is returned only when the owning process is
+// gone as well, which is the signal to prune the window from the model.
 //
 // Safe from any thread. AXUIElement calls are thread-safe by design, and NSRunningApplication is
 // documented as such -- gt_ax_window_list already relies on the latter.

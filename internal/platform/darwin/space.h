@@ -78,4 +78,16 @@ gt_status gt_space_list(uint64_t *buf, int32_t cap, int32_t *out_n, int32_t *out
 // to" versus "which windows are currently ordered in on this Space". P2.4 was asked the former.
 // Swapping to the latter would need a multi-Space machine to validate, which P2.4 did not have.
 
+// P7.3 (optional): if window wid is on a Space other than the current one, switch to that Space so
+// gt_window_raise can then resolve the window through Accessibility -- kAXWindowsAttribute lists only
+// the current Space (D20/D46). Returns 1 only if the current Space actually changed (the caller
+// retries the AX resolve); 0 -- private write symbols absent, the window's Space unknown or already
+// current, or the switch did not take -- means fall back to P7.1's app-only activation.
+//
+// This is the one call in this file that WRITES, and it is a bet on symbols Apple never documented.
+// It lives here rather than in shim.h/action.h for the reason in this file's opening comment: a
+// switcher that will not launch because a private symbol moved is worse than one optional behaviour
+// degrading to P7.1's floor. NOT VERIFIED on this one-Space machine -- see docs/tasks/P7.3.md, V6.2.
+int gt_space_switch_to_window(uint32_t wid);
+
 #endif
