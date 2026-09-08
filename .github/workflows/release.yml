@@ -40,6 +40,12 @@ jobs:
         run: |
           tag="$GITHUB_REF_NAME"
           short="${tag#v}"
+          # actions/checkout leaves a lightweight ref at the tag name pointing straight
+          # at the commit, which shadows the annotated tag object — %(contents:subject)
+          # then reads the *commit* subject, not the tag message (that is how v0.2.0's
+          # notes came out as the commit line). Force the local ref back to the real
+          # annotated object before reading it.
+          git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
           # The annotated tag's subject line becomes the manifest's one-line notes;
           # a lightweight tag has none, so fall back to something non-empty.
           notes="$(git tag -l --format='%(contents:subject)' "$tag")"
