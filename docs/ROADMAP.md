@@ -35,14 +35,13 @@ task that comes back negative changes the approach; it does not stop the work.
       screenshot; the frontmost app never changed across 20 summons. "The call returned" is ~1 ms while
       the cold frame commits at ~14 ms, so measuring the call would have been wrong by 10x.
       **Still open, needs a human:** behaviour over a full-screen app and across Spaces.
-- [~] **P0.2** CGEventTap hotkey from Go — `spike/hotkey` — **code complete; the measurement is deferred
-      to [V6.1](#phase-6--verification).** The spike is written and builds: a session-level tap inserted
-      at the head, the `kCGEventTapDisabledByTimeout` re-enable, the C→Go crossing instrumented on the
-      tap's own CoreFoundation thread, and the swallow. **No number is claimed and the box is not `[x]`.**
-      The 5 ms budget is about a *real* keypress travelling the HID path, TCC will not let one be
-      synthesised, and the spike prints `INCONCLUSIVE` rather than scoring a synthetic run — see the
-      `-manual` protocol in `docs/tasks/P0.2.md`.
-      **`assumption`:** that the hotkey arrives inside 5 ms. Phase 2's summon path is designed against it.
+- [x] **P0.2** CGEventTap hotkey from Go — `spike/hotkey` — code complete since Phase 0; **measured in
+      [V6.1](#phase-6--verification) (D45): 3.2 ms worst case over 20 real ⌥⇥ presses, 64 % of the
+      5 ms budget.** A session-level tap inserted at the head, `kCGEventTapDisabledByTimeout` re-enable,
+      the C→Go crossing instrumented on the tap's own CoreFoundation thread, and the swallow. The first
+      crossing (28 µs) is not the cold-thread outlier P0.2 feared. `INCONCLUSIVE` on a synthetic run;
+      the real number needed a human — see the `-manual` protocol in `docs/tasks/P0.2.md`.
+      **`assumption` discharged (D45):** the hotkey arrives inside 5 ms. Phase 2's summon path holds.
 - [x] **P0.3** Batched window enumeration — `spike/memory` — **done: 57 ms cold, 0.30 ms warm** for 18 windows
       in one cgo call. Inside budget. See D5 — the cold cost must be paid at launch, not first summon.
 - [x] **P0.4** Thumbnail hold/release — split, both halves done. Not a competitive target any more
@@ -77,7 +76,7 @@ task that comes back negative changes the approach; it does not stop the work.
 | metric | budget | status |
 |---|---|---|
 | summon → pixels on screen | < 100 ms | **budget allocated, not yet measured end to end.** Drawing 1.3 ms (D13), capture ~46 ms and unparallelisable (D12), enumeration 0.30 ms warm (D5) → the budget goes on data → **V6.3** |
-| hotkey callback latency | < 5 ms | **unmeasured** — code exists, only a real keypress counts → **V6.1** |
+| hotkey callback latency | < 5 ms | **met (D45, V6.1): 3.2 ms worst case over 20 real ⌥⇥ presses, mean 0.6 ms; first crossing 28 µs, not an outlier** |
 | capture → release, 100 cycles | no net growth | **met**: +0.0 MB on `IOSurface`, with a held-20 control proving the instrument is not blind (D14) |
 | thumbnail cache | bounded, bound is a number | **policy met** (P1.7, bounded LRU); the bound's real-world size is **V6.4** |
 
@@ -304,26 +303,24 @@ Everything Phases 0–5 deferred, run once against the assembled app. **This pha
 is not a formality**: it is where the `assumption` tags above are cashed in, and a task here coming back
 negative is expected to send work back into an earlier phase rather than be waved through.
 
-Serial, one owner. Four of these (V6.1, V6.2, V6.9, V6.10) need a human at the machine and three more
-(V6.3, V6.4, V6.5, V6.7) need a real Mac with a window server — TCC blocks synthesising the input and an
-agent host has no display, the same wall P0.7 and P0.1 hit, not a gap in the tooling.
+Serial, one owner. Of what remains, V6.2 / V6.9 / V6.10 need a human at the machine and V6.3 / V6.4 /
+V6.5 / V6.7 need a real Mac with a window server — TCC blocks synthesising the input and an agent host
+has no display, the same wall P0.7 and P0.1 hit, not a gap in the tooling.
 
-**Order matters.** V6.1 and V6.2 are Phase 0 debts and are cheap; run them first, because either one
-coming back badly changes Phase 2/3 code rather than merely reporting on it.
+**Order matters.** V6.1 (done) and V6.2 are Phase 0/3 debts — run first, because either coming back
+badly changes Phase 2/3 code rather than merely reporting on it. V6.1 came back clean (D45).
 
-**Done so far (2026-09-08):** the four tasks an agent host *can* run — V6.6, V6.8, V6.11, V6.12. What
-is left is the human/machine checklist (V6.1–V6.5, V6.7, V6.9, V6.10) — **all eight now have a
-turnkey `docs/tasks/V6.N.md`** (protocol, prerequisites, the acceptance bar, where it feeds back), so
-whoever sits at a Mac executes rather than re-derives. `☐ ready` below = contract written, needs a
-machine.
+**Done so far:** V6.6, V6.8, V6.11, V6.12 (agent-run, 2026-09-08). **V6.1 (2026-09-08, D45)** — the
+first task of the on-machine session. What is left: V6.2–V6.5, V6.7, V6.9, V6.10 — all have a turnkey
+`docs/tasks/V6.N.md`; `☐ ready` = contract written, needs the machine/human step.
 
 | ID | status | what | acceptance | needs |
 |---|---|---|---|---|
-| **V6.1** | ☐ ready | Hotkey delivery latency, real keypress | `spike/hotkey -manual -n 20` reports worst-case event→callback **< 5 ms**, and the first C→Go crossing separately from steady state. Contract: `docs/tasks/V6.1.md` | a human, Accessibility granted to the responsible process |
+| **V6.1** | ✅ **done** | Hotkey delivery latency, real keypress | **3.2 ms worst case over 20 real ⌥⇥ presses** (mean 0.6, p50 0.28), 64 % of the 5 ms budget; first C→Go crossing 28 µs and not an outlier; no `kCGEventTapDisabledByTimeout`. D45; P0.2 → `[x]`. Contract: `docs/tasks/V6.1.md` | — (done) |
 | **V6.2** | ☐ ready | Panel over a full-screen app and across Spaces | panel appears **over** a full-screen app and follows the user across Spaces, verified by screenshot rather than by the absence of an error; plus P2.4's SpaceID converse. Contract: `docs/tasks/V6.2.md` | a human, ≥ 2 Spaces |
 | **V6.3** | ☐ ready | Summon → pixels, end to end | **< 100 ms** on the real app, timed to the CA commit and not to the call returning (D13: timing the call is wrong by 10x). Contract: `docs/tasks/V6.3.md` | a Mac with a window server |
 | **V6.4** | ☐ ready | Thumbnail memory at realistic scale | 50-window cache at Retina resolution stays inside the stated bound; measured on `spike/procmem`'s **`IOSurface`** row, sampled at summon (D8: the resident figure decays within seconds). Contract: `docs/tasks/V6.4.md` | a Mac, Screen Recording granted |
-| **V6.5** | ☐ ready | `internal/platform` behaviour | the platform layer is a humble object and is **not** unit-tested (ARCHITECTURE.md). Verified instead by driving the built `.app`: enumerate → order → raise the window that was selected, on a machine with ≥ 20 windows across ≥ 2 apps; plus the three documented failure paths. Contract: `docs/tasks/V6.5.md` | a Mac, both grants |
+| **V6.5** | ⚠️ **partial → Phase 7** | `internal/platform` behaviour | Driven on a real machine (2026-09-08, D46). **Enumeration ✓** — join, `cg`-recovery and exclusion-with-reason all correct. **Raise ✓ for AX-visible windows** (`both` / `ax` origin), **✗ for `cg`-only windows**: every `cg`-only raise returns `ErrNoWindow` because `gt_window_raise` resolves through `kAXWindowsAttribute`, which does not list them. The switcher shows tiles it cannot action — sent to **Phase 7**. Minimized / hidden-app / the failure sentinels: still to run. Contract: `docs/tasks/V6.5.md` | a Mac, both grants |
 | **V6.6** | ✅ **done** | Deferred table tests for the pure surfaces Phases 2–5 grew | `internal/prefs`, `internal/i18n`, `internal/update` (`version`/`manifest`/`check` over `httptest`), the event loop's `handle`, and `HotkeyDisplay` — `internal/core`-style table tests; `scripts/check.sh` green. Contract: `docs/tasks/V6.6.md` | — |
 | **V6.7** | ☐ ready | Ship the bundle (P4.5) | self-verified half done (D38). Machine half: `build/GoTab.app` launches from `/Applications` on a genuinely clean account (Gatekeeper needs a right-click → Open on a quarantined ad-hoc copy), and on a real macOS 12.0–12.2 host (`minos`/plist *agree*; a 12.0 binary *running* on 12.0 is untested — D17). Contract: `docs/tasks/V6.7.md` | a clean account + a macOS 12 host |
 | **V6.8** | ✅ **done** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` = **0 allocs/op** for the summon/cycle/dismiss kernels, plus a new `internal/app` `BenchmarkHandleGesture` (0 allocs/op) proving the loop's real gesture path is clean, and the `panelRenderer.onState` allocation measured + accepted (**D44**). Contract: `docs/tasks/V6.8.md` | — |
@@ -337,6 +334,58 @@ task. All twelve now exist: V6.6 / V6.8 / V6.11 got theirs as they were run, V6.
 V6.1–V6.5 / V6.7 / V6.9 / V6.10 were written up front (2026-09-08) from the roadmap rows and the
 `assumption` tags so the Mac session is execute-only. Each names the exact protocol, the acceptance
 bar, and — the point of the phase — where a negative result sends the work back.
+
+---
+
+## Phase 7 — Actionability: every tile can be switched to, or is not a tile
+
+**Why this phase exists:** V6.5 (D46) drove the assembled switcher and found the gap the P2.3c join
+(D21) always implied. The join recovers windows Accessibility cannot enumerate — usually on another
+Space — so the panel shows them; but `gt_window_raise` resolves a window through
+`kAXWindowsAttribute`, which does not list them, so selecting one returns `ErrNoWindow` and nothing
+happens. A window closed with ⌘W while its app stays alive can linger the same way. **A tile that
+does nothing is worse than no tile.**
+
+Two directions, and this phase does both: reach the window's *application* when the window itself is
+out of AX's reach, and drop a window from the list once it is genuinely gone.
+
+**Testing stays deferred (D16 / D23):** Phase 7's tasks carry acceptance criteria but no per-task
+tests; their on-machine verification is new rows in [Phase 6](#phase-6--verification)'s table
+(V6.13, V6.14).
+
+- [ ] **P7.1** Raise falls back to the application — `feat/P7.1` — when `gt_window_raise` cannot
+      resolve a window id to an `AXUIElement` **and the owning process is alive**, call
+      `activate_app(pid)` and return `GT_OK` rather than `GT_ERR_NO_WINDOW`. `Loop.Activate` already
+      treats a nil error as "switched"; the specific window is not ordered, but the app the user was
+      reaching for comes forward. A window whose owning pid is **gone** still returns `ErrNoWindow`
+      (P7.2 removes it). **Acceptance:** in `gotab -switch`, selecting a window that
+      `spike/raisetest` reports un-resolvable brings its application frontmost; over 10 such
+      selections `OnError` logs zero `ErrNoWindow` for a window whose pid is alive.
+- [ ] **P7.2** Dead windows leave the list — `feat/P7.2` — a window is removed from the model when
+      its owning pid is no longer running, or when enumeration has not returned it for one full
+      rescan (it already is — confirm the removal path fires) . Add a pid-liveness check to
+      `doRescan`'s prune so a ⌘W'd window of a still-running app cannot survive on a stale
+      CoreGraphics entry. **Acceptance:** a window closed with ⌘W (its app still running) is absent
+      from `gotab -list` and from the panel within one rescan; a window whose process has exited is
+      absent within one rescan; `gotab -watch` shows the removal.
+- [ ] **P7.3** *(optional)* Space-aware raise — `feat/P7.3` — raise a window that is genuinely on
+      another Space by switching to that Space first (SkyLight: `CGSManagedDisplaySetCurrentSpace` or
+      the documented-enough equivalent), so P7.1's app-only fallback becomes the exception. **This is
+      a private-API bet and may not survive a macOS release** — it is optional, and P7.1 is the
+      floor. **Acceptance:** with two Spaces, selecting a window on the other Space switches to that
+      Space and brings that exact window forward; verified by a human alongside V6.2.
+- [ ] **P7.4** Decide and document the default — `feat/P7.4` — with P7.1 in place an un-raiseable
+      window is still useful (it reaches the app), so the default is to **keep** showing it; P7.2
+      only removes windows that are actually gone. Record this in `docs/ARCHITECTURE.md` next to the
+      enumeration rule, and add a `prefs` field only if hiding app-only-reachable windows turns out
+      to be wanted. **Acceptance:** `ARCHITECTURE.md` states the rule; `scripts/check.sh` green.
+
+**Phase 7 verification (rows in Phase 6's table):**
+
+| ID | what | acceptance | needs |
+|---|---|---|---|
+| **V6.13** | P7.1 raise-fallback on a real machine | selecting a `cg`-only tile in `gotab -switch` brings its app frontmost; no `ErrNoWindow` for a live-pid window over 10 trials, incl. minimized and hidden-app targets | a Mac, both grants |
+| **V6.14** | P7.2 dead-window pruning | ⌘W a window (app alive) → gone from `-list`/panel within one rescan; kill an app → its windows gone within one rescan | a Mac, both grants |
 
 ---
 
@@ -818,4 +867,23 @@ Append one line per session. Newest last. This is how a cold session learns what
   chord and P4.4 (D37) wired the filter; only `Rules().ActiveAppOnly` is still inert (needs the
   frontmost pid on Summon) and the comments now say exactly that. Gate green; test-and-docs only.
   **Next: unchanged — the V6 checklist at a Mac, V6.1 and V6.2 first.**
+- `2026-09-08` — **On-machine session: V6.1 passes, V6.5 opens Phase 7.**
+  **V6.1 (D45):** 20 real ⌥⇥ presses — worst case event→callback **3.2 ms, 64 % of the 5 ms budget**
+  (mean 0.6, p50 0.28); first C→Go crossing 28 µs and not the cold-thread outlier P0.2 feared; no
+  `kCGEventTapDisabledByTimeout`. P0.2's box → `[x]`; Phase 0's last unmeasured target now has a
+  number. Two blips at 2.5 / 3.2 ms, still inside.
+  **V6.5 (D46):** enumeration on a live desktop is correct — the join, `cg`-recovery and
+  exclusion-with-reason all check out. **Raise works for AX-visible windows and fails
+  (`ErrNoWindow`) for every `cg`-only one** — `gt_window_raise` resolves through
+  `kAXWindowsAttribute`, which does not list other-Space windows, so the switcher renders tiles it
+  cannot action. In one `-switch` session 12/12 selections onto `cg`-only tiles failed.
+  **`spike/raisetest/` made it concrete** (3/3 AX-visible raised, the `cg`-only one did not).
+  **New Phase 7 — Actionability:** P7.1 fall back to activating the owning app when the window will
+  not resolve but its pid is alive; P7.2 prune windows once the pid is gone; P7.3 (optional)
+  real Space-switch-then-raise; P7.4 document the default (keep app-reachable windows). Verification
+  is V6.13 / V6.14 in the Phase 6 table (a new phase gets rows there, not its own tests).
+  **Also noted, unfiled:** a Finder / `open -a` launch of `GoTab.app` did not fire the ⌥⇥ tap while a
+  direct exec of the same binary did — smells like a TCC grant bound to an older build's signature
+  (`AXIsProcessTrusted` true, tap silent — the P0.2 failure mode). To chase under V6.9.
+  **Next: land Phase 7 (P7.1 first), then re-run V6.5 / V6.13; the rest of the V6 checklist stands.**
 

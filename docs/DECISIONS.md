@@ -1564,3 +1564,68 @@ change.
 - **The escape hatch, on record:** if a CPU profile of a real session ever shows this mattering, lift
   the tile/request build into a `panelRenderer` method with a pooled buffer. Not done now because
   nothing measures it as a problem.
+
+---
+
+## D45 · V6.1 — the hotkey callback lands in 3.2 ms worst case, inside the 5 ms budget — 2026-09-08
+
+`spike/hotkey -manual -n 20 -timeout 120000`, 20 real ⌥⇥ presses by a human, Accessibility granted
+to the running terminal. This is the Phase 0 debt P0.2 left as code without a number (D15) — the last
+of Phase 0's four targets to get a measurement.
+
+| metric | mean | p50 | worst | budget |
+|---|---|---|---|---|
+| event → callback | 0.60 ms | 0.28 ms | **3.20 ms** | **< 5 ms** |
+| C → Go → C round trip | 33.6 µs | 34.7 µs | 48.9 µs | — |
+| first-ever crossing | 28.0 µs | — | — | — |
+
+- **PASS at 64 % of budget.** Worst case 3.199 ms (press 18 of 20); one other blip at 2.533 ms
+  (press 16). Every other press was under 0.7 ms. The tap is session-level, inserted at the head.
+- **The first crossing is not an outlier.** 28.0 µs — squarely in the steady-state band, not the
+  cold-thread penalty P0.2 anticipated for a callback arriving on a CoreFoundation thread the Go
+  runtime has never seen. The instrument's own two-clock-read baseline is 0.009 µs, so the crossing
+  numbers are real.
+- All 20 presses swallowed (40 events seen = keydown + keyup); `kCGEventTapDisabledByTimeout` never
+  fired, so the run is a clean measurement rather than one recovered from a stall.
+- The P0.2 and P3.5 `assumption` tags ("the hotkey arrives inside 5 ms") are discharged. P0.2's box
+  moves to `[x]`; Phase 0's target table now has a number behind all four rows.
+
+---
+
+## D46 · V6.5 — the switcher shows windows it cannot raise; Phase 7 is the fix — 2026-09-08
+
+Driving the assembled `gotab -switch` on a real machine (the first thing the on-machine session did
+after V6.1). Enumeration is clean; **raise is not**.
+
+**What passed.** `gotab -list` on a live desktop: the CoreGraphics ↔ Accessibility join (P2.3c / D21)
+is correct — every titled layer-0 window is either switchable or excluded with a named reason, no
+titled window wrongly dropped, and the `cg`-only recovery visibly fires (windows AX does not
+enumerate are pulled in from CoreGraphics). Raising a window that Accessibility *can* see
+(`OriginBoth` / `OriginAXOnly`) works — 3 of 3 in a direct test (`spike/raisetest`): the window comes
+forward and its app becomes frontmost.
+
+**What failed.** Every raise of a `cg`-only window (`OriginCGOnly`) returns `GT_ERR_NO_WINDOW`
+(`ErrNoWindow`). In one `-switch` session, 12 of 12 selections failed this way — the user was
+cycling onto the two windows AX could not see (Activity Monitor and Claude, both on another Space at
+the time) plus one Chrome tab whose window id had already churned.
+
+**Root cause.** `gt_window_raise` → `copy_window_element` resolves a `CGWindowID` by asking the
+owning process for `kAXWindowsAttribute` and matching on `_AXUIElementGetWindow`. That attribute
+lists only the windows on the current Space, so a window the join recovered *because* AX could not
+see it cannot be resolved here either — same blind spot D20 found for enumeration, now inherited by
+the action path. The fallback scan of every regular application hits the same wall.
+
+**The gap is structural, not a bug in one function.** P2.3c exists to show windows AX cannot see;
+P2.5 can only act on windows AX *can* see. So the switcher renders tiles that do nothing. Stale ids
+(Chrome's New-Tab window recycling) and ⌘W'd windows of still-running apps can linger the same way.
+
+**Decision: a new Phase 7 — Actionability.** P7.1: when a window will not resolve but its owning
+process is alive, activate the *application* and return success — the user reaches what they were
+aiming at even if the specific window is not ordered. P7.2: prune a window once its pid is gone or it
+has fallen out of enumeration. P7.3 (optional, private-API bet): a real Space-switch-then-raise so
+P7.1's app-only fallback is the exception. Default (P7.4): keep showing an app-reachable window
+rather than hide it. Verification lands as V6.13 / V6.14 in Phase 6's table, per the deferred-testing
+rule (a new phase gets rows in that table, not its own tests — AGENTS.md).
+
+**Scratch instrument:** `spike/raisetest/` — enumerate, then `darwin.Raise` every window and print
+the result per origin. Kept through Phase 7; delete when V6.13 closes.
