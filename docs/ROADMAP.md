@@ -1059,4 +1059,10 @@ Append one line per session. Newest last. This is how a cold session learns what
   runtime (vs. a 6 s block under the bug), SIGINT still exits clean, and `gotab -settings` shows,
   responds to clicks, and exits on window close. The live menu-bar click is V6.15's to confirm.
   `check.sh` and `build.sh` green.
+- `2026-09-08` — **Release `v0.3.4`.** Cuts the D54 fix (the `-[NSApp run]` main loop). The stalled
+  `v0.3.3` — `6784fbc` bumped the site pill but no tag was ever pushed — is superseded; this is the
+  first tag since `v0.3.2`. Site pill → `v0.3.4`, the download-link example zip name → `GoTab-v0.3.4.zip`
+  (it had lagged at `v0.3.2`), `README.md` status → `v0.3.4`. `.github/workflows/release.yml` builds
+  the universal `.app`, cuts the GitHub Release with the zip + SHA-256, and renders `latest.json` +
+  the site to Pages from the annotated tag's subject line.
 
