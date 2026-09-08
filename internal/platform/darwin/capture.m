@@ -41,7 +41,11 @@
 // capture itself runs OUTSIDE the lock -- the SCWindow is retained and the lock dropped first -- so
 // concurrent captures do not serialise here. They serialise in the WindowServer instead, which D12
 // measured and which no lock of ours can change.
-static SCShareableContent *g_content = nil;
+// API_AVAILABLE on the declaration is what silences -Wunguarded-availability-new for this 12.3 type
+// under the minos 12.0 D17 pins. It is not a runtime guard — sck_present() + the weak link (capture.go)
+// are — it just tells clang the static check is satisfied. Every function that touches g_content
+// carries the same annotation, and gt_capture reaches all of them only inside if (@available).
+static SCShareableContent *g_content API_AVAILABLE(macos(12.3)) = nil;
 static pthread_mutex_t g_content_lock = PTHREAD_MUTEX_INITIALIZER;
 
 // Is ScreenCaptureKit's screenshot API actually present?
@@ -64,7 +68,7 @@ static BOOL sck_present(void) {
 // A getShareableContent failure is almost always a missing Screen Recording grant, but SCK does not
 // say so in a form worth modelling, so the grant is asked directly instead. That is a preflight and
 // never prompts (see gt_can_record in shim.m).
-static gt_status refresh_locked(int32_t timeout_ms) {
+static gt_status refresh_locked(int32_t timeout_ms) API_AVAILABLE(macos(12.3)) {
     __block SCShareableContent *result = nil;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
 
@@ -92,7 +96,7 @@ static gt_status refresh_locked(int32_t timeout_ms) {
 }
 
 // Caller holds g_content_lock. Returns a borrowed SCWindow, or nil.
-static SCWindow *find_window_locked(uint32_t wanted) {
+static SCWindow *find_window_locked(uint32_t wanted) API_AVAILABLE(macos(12.3)) {
     if (!g_content) return nil;
     for (SCWindow *w in g_content.windows) {
         if ((uint32_t)w.windowID == wanted) return w;
@@ -108,7 +112,7 @@ static SCWindow *find_window_locked(uint32_t wanted) {
 // Only a width is requested; the aspect ratio decides the height. Never upscales: max_w is a bound,
 // not a target, and a 200 px window asked for at 400 px stays 200 px rather than becoming a blurry
 // bitmap twice the size.
-static SCStreamConfiguration *config_for(SCWindow *win, int32_t max_w) {
+static SCStreamConfiguration *config_for(SCWindow *win, int32_t max_w) API_AVAILABLE(macos(12.3)) {
     CGFloat sw = win.frame.size.width, sh = win.frame.size.height;
     if (sw < 1 || sh < 1) return nil;
 
@@ -158,7 +162,11 @@ gt_status gt_capture(uint32_t window_id, int32_t max_w, int32_t timeout_ms, gt_i
 
     if (!sck_present()) return GT_ERR_UNAVAILABLE;
 
-    @autoreleasepool {
+    // if (@available) wrapping the whole body is the lexical form -Wunguarded-availability-new wants
+    // for the SCScreenshotManager (14.0) and 12.3 SCK calls below, under the minos 12.0 D17 pins.
+    // sck_present() is the real runtime gate — the weak link plus NSClassFromString — and has already
+    // returned for < 14, so the trailing return is a formality the compiler needs, not a live path.
+    if (@available(macOS 14.0, *)) @autoreleasepool {
         SCWindow *win = nil;
         gt_status err = GT_OK;
 
@@ -245,6 +253,7 @@ gt_status gt_capture(uint32_t window_id, int32_t max_w, int32_t timeout_ms, gt_i
         *out_img = gt_image_adopt(img);
         return GT_OK;
     }
+    return GT_ERR_UNAVAILABLE; // < macOS 14: sck_present() already returned; this satisfies the compiler
 }
 
 void gt_image_size(gt_image_ref img, int32_t *out_w, int32_t *out_h) {
