@@ -2004,3 +2004,38 @@ helps no one. The escape hatch stays for people who want to inspect it first.
 `--uninstall` / `--uninstall --purge` mirror `scripts/uninstall.sh`. Base-system tools only
 (`curl`, `ditto`, `shasum`, `xattr`, `codesign`); the gate does not lint shell, so it is checked
 with `bash -n` and by running it end to end against the live release.
+
+---
+
+## D58 · The panel's VoiceOver container label was never in the live tree — fixed on the window — 2026-09-08
+
+D51 (the V6.10 structural pass) found the per-tile accessibility right — `AXButton`, `"<title>,
+<app>"`, one `AXSelected` advancing on every cycle — but the **container label was missing**:
+`GTTileView` answers `isAccessibilityElement == NO` with `accessibilityRole` group and
+`accessibilityLabel` `"Window switcher"`, yet live the tiles read as **direct children of the
+borderless panel window**, whose `AXTitle` is empty. Nothing in the tree carried the text.
+
+**Why.** AppKit promotes a non-element view's `accessibilityChildren` to the nearest ancestor that
+*is* an element when the view has no real subview elements of its own — and the tile elements are
+synthetic (`NSAccessibilityElement` in `g_a11y_children`), not subviews. So `GTTileView` is skipped
+and its label with it. A borderless `NSPanel` has no title bar and no `AXTitle`, so focus entering
+the panel announced nothing.
+
+**Fix (all in `panel.m`, no `panel.h` change):**
+
+- `gt_panel_create` now sets `[g_panel setAccessibilityTitle:@"Window switcher"]` — VoiceOver speaks
+  the window title on focus-in regardless of whether the container view survives the tree, and
+  `[g_effect setAccessibilityElement:NO]` pins the visual-effect view as a pass-through so it
+  forwards the tiles rather than swallowing them. `GTTileView`'s own group role + label stay (they
+  help on any macOS version where the container *does* resolve).
+- The spoken per-cycle announcement (`NSAccessibilityAnnouncementRequestedNotification`,
+  `panel_populate`) now carries the position itself — `"<title>, <app>, 2 of 7"` via `a11y_spoken()`
+  — because that utterance is what a no-sight user navigates by and it must not depend on VoiceOver
+  having placed the tiles in a working container. The per-element `accessibilityLabel` stays the
+  bare `"<title>, <app>"` so VoiceOver's own "N of M" is not doubled when the tree does resolve.
+
+`check.sh` green, `build.sh` clean at minos 12.0. **Still needs the human VoiceOver pass (V6.10):**
+that "Window switcher" is now actually heard on summon, and the selection — with its position —
+on every ⌥⇥ cycle. Tile press stays a deliberate no-op (`panel.h` frozen, no raise callback); a
+VoiceOver user commits by releasing ⌥, same as a sighted user. Wiring press-to-raise remains a
+separate follow-up (it needs a new exported callback + an absolute-select event in `internal/app`).

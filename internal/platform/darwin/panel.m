@@ -35,6 +35,14 @@ static int g_have_palette = 0;
 // element in g_a11y_children, kept in step with g_tiles by a11y_sync(). g_a11y_last_* debounce the
 // spoken announcement so a cycle speaks the new selection once and a redraw that changed nothing is
 // silent; gt_panel_hide resets them so the next summon always speaks its initial selection.
+//
+// D51 / V6.10 fix: a view that returns isAccessibilityElement == NO and has no real subview elements
+// gets its accessibilityChildren promoted past it, so the "Window switcher" label on GTTileView was
+// never in the live tree — the tiles read as bare children of a borderless, title-less NSPanel. The
+// label now also rides on the panel window's AXTitle (gt_panel_create), which VoiceOver announces
+// when focus enters the panel regardless of whether the container view survives; and the spoken
+// per-cycle announcement carries "N of M" itself, so a no-sight user is never guessing their place.
+#define GT_A11Y_CONTAINER_LABEL @"Window switcher"
 static NSMutableArray *g_a11y_children = nil;
 static int32_t g_a11y_last_selected = -1;
 static int32_t g_a11y_last_n = -1;
@@ -139,13 +147,22 @@ static NSRect tile_image_rect(NSRect tile) {
 @end
 
 // The label a screen reader speaks for a tile: "<title>, <app>", or just the app when the window has
-// no title, or a last-resort constant so an element is never silent.
+// no title, or a last-resort constant so an element is never silent. This is the per-element label;
+// VoiceOver appends its own "N of M" when the container tree resolves.
 static NSString *a11y_label(const gt_tile *t) {
     NSString *title = tile_string(t->title, t->title_len);
     NSString *app = tile_string(t->subtitle, t->subtitle_len);
     if (title.length == 0) return app.length ? app : @"Untitled window";
     if (app.length == 0) return title;
     return [NSString stringWithFormat:@"%@, %@", title, app];
+}
+
+// The string spoken on each summon / ⌥⇥ cycle. Carries the position explicitly ("... , 2 of 7")
+// because the announcement is posted as a standalone utterance — it is what a no-sight user navigates
+// by, and it must not depend on VoiceOver having placed the tiles inside a working container.
+static NSString *a11y_spoken(int32_t index, int32_t total) {
+    if (index < 0 || index >= total || !g_tiles) return GT_A11Y_CONTAINER_LABEL;
+    return [NSString stringWithFormat:@"%@, %d of %d", a11y_label(&g_tiles[index]), index + 1, total];
 }
 
 // Bring g_a11y_children to exactly g_ntiles elements and refresh each one's label, frame and selected
@@ -196,7 +213,7 @@ static void a11y_sync(void) {
     return NSAccessibilityGroupRole;
 }
 - (NSString *)accessibilityLabel {
-    return @"Window switcher";
+    return GT_A11Y_CONTAINER_LABEL;
 }
 - (NSArray *)accessibilityChildren {
     return g_a11y_children ? [[g_a11y_children copy] autorelease] : @[];
@@ -397,6 +414,15 @@ gt_status gt_panel_create(void) {
     [g_content setAutoresizingMask:(NSViewWidthSizable | NSViewHeightSizable)];
     [g_effect addSubview:g_content];
 
+    // Accessibility container label (P5.2, hardened per D51 / V6.10). GTTileView already answers the
+    // group role + "Window switcher" label, but AppKit promotes a non-element view's synthetic
+    // children past it, so that label never reached the live tree. Put it on the window's AXTitle
+    // too: VoiceOver speaks that when focus enters the panel, and a borderless NSPanel otherwise has
+    // none. g_effect is pinned as a non-element pass-through so it forwards the tiles rather than
+    // swallowing them.
+    [g_panel setAccessibilityTitle:GT_A11Y_CONTAINER_LABEL];
+    [g_effect setAccessibilityElement:NO];
+
     g_tile_layers = [[NSMutableArray alloc] init];
     return GT_OK;
 }
@@ -470,7 +496,7 @@ static gt_status panel_populate(const gt_tile *tiles, int32_t n) {
         if (sel >= 0 && (sel != g_a11y_last_selected || setChanged)) {
             NSAccessibilityPostNotificationWithUserInfo(
                 g_content, NSAccessibilityAnnouncementRequestedNotification,
-                @{NSAccessibilityAnnouncementKey : a11y_label(&g_tiles[sel]),
+                @{NSAccessibilityAnnouncementKey : a11y_spoken(sel, g_ntiles),
                   NSAccessibilityPriorityKey : @(NSAccessibilityPriorityHigh)});
             NSAccessibilityPostNotification(g_content,
                                             NSAccessibilitySelectedChildrenChangedNotification);
