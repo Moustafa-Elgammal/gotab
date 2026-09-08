@@ -353,12 +353,19 @@ out of AX's reach, and drop a window from the list once it is genuinely gone.
 tests; their on-machine verification is new rows in [Phase 6](#phase-6--verification)'s table
 (V6.13, V6.14).
 
-- [ ] **P7.1** Raise falls back to the application — `feat/P7.1` — when `gt_window_raise` cannot
-      resolve a window id to an `AXUIElement` **and the owning process is alive**, call
-      `activate_app(pid)` and return `GT_OK` rather than `GT_ERR_NO_WINDOW`. `Loop.Activate` already
-      treats a nil error as "switched"; the specific window is not ordered, but the app the user was
-      reaching for comes forward. A window whose owning pid is **gone** still returns `ErrNoWindow`
-      (P7.2 removes it). **Acceptance:** in `gotab -switch`, selecting a window that
+- [x] **P7.1** Raise falls back to the application — `feat/P7.1` — **code landed.** When
+      `gt_window_raise` cannot resolve a window id to an `AXUIElement` (status `GT_ERR_NO_WINDOW`)
+      **and the owning process is a running application**, it now calls `activate_app(pid)` and
+      returns `GT_OK` rather than `GT_ERR_NO_WINDOW`. `Loop.Activate` already treats a nil error as
+      "switched"; the specific window is not ordered, but the app the user was reaching for comes
+      forward. `copy_window_element` hands back the owning pid even on an empty return so the fallback
+      has a target; `app_is_alive` (via `runningApplicationWithProcessIdentifier:`) is the line
+      between "activate the app" and `ErrNoWindow`. A window whose owning pid is **gone** still
+      returns `ErrNoWindow` (P7.2 removes it); `GT_ERR_TIMEOUT` / `GT_ERR_NOT_TRUSTED` are returned
+      as-is, not rerouted. Contract: `docs/tasks/P7.1.md`. Gate green, no tests added (D16 / D23).
+      **`assumption` → V6.13:** that the app-activation fallback reaches the intended app for a
+      `cg`-only window and that nil is the right contract for `Loop.Activate` — the `cg`-only path is
+      exercised only on a machine. **Acceptance (V6.13):** in `gotab -switch`, selecting a window that
       `spike/raisetest` reports un-resolvable brings its application frontmost; over 10 such
       selections `OnError` logs zero `ErrNoWindow` for a window whose pid is alive.
 - [ ] **P7.2** Dead windows leave the list — `feat/P7.2` — a window is removed from the model when
@@ -886,4 +893,18 @@ Append one line per session. Newest last. This is how a cold session learns what
   direct exec of the same binary did — smells like a TCC grant bound to an older build's signature
   (`AXIsProcessTrusted` true, tap silent — the P0.2 failure mode). To chase under V6.9.
   **Next: land Phase 7 (P7.1 first), then re-run V6.5 / V6.13; the rest of the V6 checklist stands.**
+- `2026-09-08` — **P7.1 landed (code only; V6.13 verifies on a machine).** `gt_window_raise` now
+  falls back to `activate_app(pid)` and returns `GT_OK` when a window id will not resolve to an
+  `AXUIElement` with status `GT_ERR_NO_WINDOW` **and** the owning pid is a running application —
+  the `cg`-only / other-Space tiles D46 found the switcher could not action. `copy_window_element`
+  hands the owning pid back even on an empty return; `app_is_alive`
+  (`runningApplicationWithProcessIdentifier:`) draws the line between the fallback and `ErrNoWindow`,
+  which is still returned when the owner is gone (→ P7.2). `GT_ERR_TIMEOUT` / `GT_ERR_NOT_TRUSTED`
+  are not rerouted — a wedged app or a revoked grant is a different answer. Changes confined to
+  `action.{h,m,go}`; `Raise`'s signature and `Minimize`/`Unminimize`/`Close` are untouched. Gate
+  green, no tests added (D16 / D23). Contract + design notes in `docs/tasks/P7.1.md`; the
+  `assumption` (fallback reaches the intended app; nil is the right contract for `Loop.Activate`) is
+  tagged at P7.1 pointing to V6.13.
+  **Next: P7.2 (dead-window prune in `doRescan`), then P7.4 (document the keep-by-default rule);
+  P7.3 optional. On a Mac: V6.13 / V6.14, then the rest of the V6 checklist.**
 
