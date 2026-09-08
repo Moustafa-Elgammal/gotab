@@ -2097,3 +2097,32 @@ a code change.
 "launches on a clean account without a right-click → Open" true by construction rather than by the
 quarantine strip. Until then V6.7's clean-account check stands against the ad-hoc build. To make
 notarization automatic later, add `release: { types: [published] }` to the workflow's `on:`.
+
+---
+
+## D61 · Code-review pass on the installer + the VoiceOver work — six fixes — 2026-09-08
+
+`/code-review` over `get.sh` (D57) + D58/D59 + `notarize.yml` (D60). All six findings were real and
+are fixed:
+
+- **`get.sh` aborted instead of erroring helpfully.** Under `set -euo pipefail`, the version-resolve
+  fallbacks (`… | sed … | head -1`) exit the whole script when `curl` fails or `head` SIGPIPEs `sed`,
+  skipping the `die "… Set GOTAB_VERSION=…"`. Both pipelines now end `|| true`. Same class: the
+  `--uninstall` `rm -rf … && ok` and the `~/Applications` `mkdir -p` now use `|| die`.
+- **`get.sh --uninstall` couldn't remove what it installed.** The installer auto-falls-back to
+  `~/Applications` when `/Applications` is unwritable; uninstall only checked
+  `${GOTAB_APPS:-/Applications}`. It now removes `GoTab.app` from **both** system and per-user
+  Applications when `GOTAB_APPS` is unset (and only `GOTAB_APPS` when it is set).
+- **`get.sh --purge` alone fell through to a reinstall** — `$1` had to be exactly `--uninstall`. The
+  guard is now `case … in --uninstall|--purge)` and `--purge` in either position triggers the purge.
+- **`Choose` raised the wrong window on a stale index (D59).** A VoiceOver press posted the tile's
+  *position*; a rescan between render and press reorders the list, so `Selection.Set(index)` could
+  land on a different window — `Activate` is immune only because it commits to `l.sel.ID`. `Choose`
+  now carries a `core.WindowID`: `cmd/gotab` maps the pressed index to the ID of the frame the user
+  is looking at (`panelRenderer.tileIDs`, an `atomic.Pointer` published per frame), and `handle`
+  anchors a fresh cursor to that ID via `Reconcile` — if the window has left the list it just
+  dismisses rather than raising whatever sits at a clamped row. `Event.Index` is gone;
+  `BenchmarkHandleGesture` still 0 allocs/op.
+- **`notarize.yml` called `stapler validate` bare** (not `xcrun stapler`), which is not on the
+  runner PATH, and *after* `gh release upload --clobber`. Now `xcrun stapler validate`, run right
+  after `stapler staple` — before the release assets are touched. (Dormant workflow, D60.)

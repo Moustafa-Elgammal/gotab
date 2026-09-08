@@ -14,7 +14,8 @@
 #   GOTAB_KEEP_QUARANTINE=1     do NOT strip com.apple.quarantine (you'll need right-click → Open)
 #
 #   ... | bash -s -- --uninstall        remove GoTab (keeps your settings)
-#   ... | bash -s -- --uninstall --purge   also remove settings and the permission grants
+#   ... | bash -s -- --purge            remove GoTab, its settings, and the permission grants
+#                                       (--uninstall --purge is the same thing)
 #
 # The published bundle is ad-hoc signed, NOT notarized (see docs/DECISIONS.md D39). This script
 # removes the download quarantine so it launches without a Gatekeeper prompt — that is the same trust
@@ -42,20 +43,40 @@ die()  { printf '%s✗ %s%s\n' "$red" "$*" "$off" >&2; exit 1; }
 
 # --- uninstall -------------------------------------------------------------------
 
-if [ "${1:-}" = "--uninstall" ]; then
+case "${1:-}" in
+--uninstall | --purge)
   say "${bold}Uninstalling ${APP_NAME}${off}"
   pkill -x "$APP_NAME" 2>/dev/null && { sleep 1; ok "Quit the running app"; } || true
-  if [ -d "$DEST" ]; then rm -rf "$DEST" && ok "Removed ${DEST}"; else warn "Not installed at ${DEST}"; fi
-  if [ "${2:-}" = "--purge" ]; then
+
+  # Remove from wherever an install could have landed: GOTAB_APPS if it is set, else both the
+  # system and per-user Applications — the installer auto-falls-back to ~/Applications when
+  # /Applications is not writable.
+  if [ -n "${GOTAB_APPS:-}" ]; then
+    targets=("${GOTAB_APPS%/}/${APP_NAME}.app")
+  else
+    targets=("/Applications/${APP_NAME}.app" "${HOME}/Applications/${APP_NAME}.app")
+  fi
+  removed=0
+  for t in "${targets[@]}"; do
+    if [ -d "$t" ]; then
+      rm -rf "$t" || die "Could not remove ${t}."
+      ok "Removed ${t}"
+      removed=1
+    fi
+  done
+  [ "$removed" = 1 ] || warn "No ${APP_NAME}.app found in: ${targets[*]}"
+
+  if [ "${1:-}" = "--purge" ] || [ "${2:-}" = "--purge" ]; then
     rm -f "${HOME}/Library/Preferences/app.gotab.plist"
     defaults delete app.gotab 2>/dev/null || true
     tccutil reset Accessibility app.gotab >/dev/null 2>&1 || true
-    tccutil reset ScreenCapture  app.gotab >/dev/null 2>&1 || true
+    tccutil reset ScreenCapture app.gotab >/dev/null 2>&1 || true
     ok "Removed settings and reset the permission grants"
   fi
   say "Done."
   exit 0
-fi
+  ;;
+esac
 
 # --- preflight -----------------------------------------------------------------
 
@@ -77,15 +98,18 @@ VERSION="${VERSION#v}"
 if [ -z "$VERSION" ]; then
   for feed in "${FEEDS[@]}"; do
     json=$(curl -fsSL --retry 2 --connect-timeout 10 "$feed" 2>/dev/null) || continue
-    VERSION=$(printf '%s' "$json" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+    # `|| true`: a truncated body can SIGPIPE sed via head, and `set -o pipefail` would abort the
+    # whole script before the die below rather than falling through to the next feed / the die.
+    VERSION=$(printf '%s' "$json" | sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 || true)
     [ -n "$VERSION" ] && break
   done
 fi
 if [ -z "$VERSION" ]; then
-  # Last resort: the GitHub API (unauthenticated, rate-limited, but fine as a fallback).
+  # Last resort: the GitHub API (unauthenticated, rate-limited, but fine as a fallback). `|| true`
+  # keeps a failed request (offline, DNS, 403) from aborting under `set -e` before the die.
   tag=$(curl -fsSL --retry 2 -H 'Accept: application/vnd.github+json' \
         "https://api.github.com/repos/${REPO}/releases/latest" 2>/dev/null \
-        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)
+        | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1 || true)
   VERSION="${tag#v}"
 fi
 [ -n "$VERSION" ] || die "Could not determine the latest version. Set GOTAB_VERSION=x.y.z and re-run."
@@ -126,7 +150,7 @@ if [ ! -d "$DEST_DIR" ]; then mkdir -p "$DEST_DIR" 2>/dev/null || true; fi
 if ! { [ -w "$DEST_DIR" ] || { [ -d "$DEST" ] && [ -w "$DEST" ]; }; }; then
   if [ -z "${GOTAB_APPS:-}" ]; then
     DEST_DIR="${HOME}/Applications"; DEST="${DEST_DIR}/${APP_NAME}.app"
-    mkdir -p "$DEST_DIR"
+    mkdir -p "$DEST_DIR" || die "Could not create ${DEST_DIR}."
     warn "/Applications is not writable — installing to ${DEST_DIR} instead."
     warn "Re-run with GOTAB_APPS=/Applications (and sudo) for a system-wide install."
   else

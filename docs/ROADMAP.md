@@ -1150,3 +1150,10 @@ Append one line per session. Newest last. This is how a cold session learns what
   (and an Apple Developer membership). `release.yml` is untouched and still cuts the ad-hoc build on
   every tag; `get.sh`'s quarantine strip (D57) keeps the one-liner working until this is run, which
   closes the Gatekeeper half of **V6.7**.
+- `2026-09-08` — **Code-review pass — six fixes (D61).** `/code-review` over the installer + D58/D59
+  + `notarize.yml`. `get.sh`: version-resolve no longer aborts under `set -e` (helpful `die`
+  instead), `--uninstall` removes from both `/Applications` and `~/Applications`, `--purge` works as
+  a lone flag. `Choose` (D59) now commits by `core.WindowID` not tile index, so a rescan between
+  render and a VoiceOver press can't redirect the raise; `cmd/gotab` maps index→ID against the
+  presented frame. `notarize.yml`: `xcrun stapler validate`, before the upload. Gate green,
+  `BenchmarkHandleGesture` still 0 allocs/op.

@@ -125,13 +125,12 @@ jobs:
             --apple-id "$NOTARY_USER" --team-id "$TEAM_ID" --password "$NOTARY_PW" \
             --wait --timeout 30m
           xcrun stapler staple build/GoTab.app
+          xcrun stapler validate build/GoTab.app   # must pass — do it before the release assets are touched
           rm -f "GoTab-$TAG.zip"
           ditto -c -k --keepParent build/GoTab.app "GoTab-$TAG.zip"
           shasum -a 256 "GoTab-$TAG.zip" | tee "GoTab-$TAG.zip.sha256"
-          # Informational: Gatekeeper's verdict on the stapled bundle. "accepted" / "source=Notarized
-          # Developer ID" is the goal.
+          # Informational: Gatekeeper's verdict. "accepted" / "source=Notarized Developer ID" is the goal.
           spctl -a -vvv -t install build/GoTab.app || true
-          stapler validate build/GoTab.app
 
       - name: Replace the release's assets with the notarized build
         env:

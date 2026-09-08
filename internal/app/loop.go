@@ -23,8 +23,8 @@ const (
 	Cycle
 	// Activate — commit to the current selection: raise that window and dismiss.
 	Activate
-	// Choose — commit to the entry at Index (a VoiceOver press on a specific tile, D59): select it,
-	// then the same raise-and-dismiss as Activate.
+	// Choose — commit to a specific window by ID (a VoiceOver press on a tile, D59): select it if
+	// it is still listed, then the same raise-and-dismiss as Activate.
 	Choose
 	// Quit — stop the loop.
 	Quit
@@ -33,9 +33,8 @@ const (
 // Event is one thing that happened. Zero size beyond its fields; posting one allocates nothing.
 type Event struct {
 	Kind   Kind
-	Window core.WindowID  // Focused
+	Window core.WindowID  // Focused, Choose
 	Dir    core.Direction // Cycle
-	Index  int            // Choose — position in the presentation order
 }
 
 // Loop owns the model. Construct with New, drive with Run, feed with Post and Rescan.
@@ -166,13 +165,22 @@ func (l *Loop) handle(e Event) bool {
 	case Activate:
 		l.activateSelection()
 	case Choose:
-		// A VoiceOver press on tile e.Index (D59). Set the cursor there — Selection.Set clamps into
-		// the list — then commit exactly as Activate does. Ignored when not summoned, like Cycle.
+		// A VoiceOver press on the tile for window e.Window (D59). By ID, not by position: a rescan
+		// can reorder the list between the frame the user is navigating and the press, and Activate
+		// is only immune because it commits to l.sel.ID. Anchor a fresh cursor to the ID and let
+		// Reconcile find its row; if the window is gone from the list, just dismiss — raising the
+		// window that happens to sit at a clamped row is the bug this avoids. Ignored when not
+		// summoned, like Cycle.
 		if !l.visible {
 			return false
 		}
-		l.sel.Set(l.order, l.model, e.Index)
-		l.activateSelection()
+		l.sel = core.Selection{ID: e.Window, Row: -1}
+		l.sel.Reconcile(l.order, l.model)
+		if l.sel.ID == e.Window {
+			l.activateSelection()
+		} else {
+			l.visible = false
+		}
 	case Quit:
 		return true
 	}

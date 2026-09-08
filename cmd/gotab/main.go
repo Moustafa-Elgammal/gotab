@@ -24,6 +24,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/Moustafa-Elgammal/gotab/internal/app"
@@ -600,10 +601,15 @@ func runSwitcher(demo bool) int {
 	r := &panelRenderer{opts: p.LayoutOpts(), pf: pf}
 	l.OnState = r.onState
 
-	// VoiceOver press-to-raise (D59): a VO user pressing a panel tile selects it and activates — the
-	// same commit as releasing ⌥. Post is non-blocking and safe from the main thread, where the
-	// accessibility press lands.
-	darwin.OnTileActivate(func(i int) { l.Post(app.Event{Kind: app.Choose, Index: i}) })
+	// VoiceOver press-to-raise (D59): a VO user pressing panel tile i selects that window and
+	// activates — the same commit as releasing ⌥. The index is mapped to a window ID against the
+	// frame the user is looking at (r.tileID) so a rescan between render and press can't redirect it.
+	// Post is non-blocking and safe from the main thread, where the accessibility press lands.
+	darwin.OnTileActivate(func(i int) {
+		if id := r.tileID(i); id != 0 {
+			l.Post(app.Event{Kind: app.Choose, Window: id})
+		}
+	})
 
 	// Restyle on a Light/Dark flip. onChange runs on the main thread and ApplyTheme is non-blocking.
 	if err := darwin.WatchAppearance(func() { darwin.ApplyTheme() }); err != nil {
@@ -666,12 +672,30 @@ type panelRenderer struct {
 	pf     *darwin.Prefetcher
 	shown  bool
 	frames []core.Rect // reused across summons; core.Layout stays 0-alloc
+
+	// tileIDs is the window ID behind each tile of the last presented frame, in order. Written by
+	// onState (loop goroutine), read by the darwin.OnTileActivate callback (main thread) to turn a
+	// VoiceOver press on tile i into a Choose for that specific window rather than a raw index a
+	// rescan could have invalidated (D59, and the code-review fix that followed). atomic.Pointer, not
+	// a lock: a fresh slice per frame, published whole.
+	tileIDs atomic.Pointer[[]core.WindowID]
+}
+
+// tileID returns the window behind tile i of the last presented frame, or 0 if i is out of range or
+// nothing is currently shown.
+func (r *panelRenderer) tileID(i int) core.WindowID {
+	ids := r.tileIDs.Load()
+	if ids == nil || i < 0 || i >= len(*ids) {
+		return 0
+	}
+	return (*ids)[i]
 }
 
 func (r *panelRenderer) onState(m *core.Model, o *core.Order, sel core.Selection, visible bool) {
 	if !visible {
 		if r.shown {
 			r.shown = false
+			r.tileIDs.Store(nil) // a press after dismissal maps to no window
 			r.pf.Want(nil)
 			darwin.OnMain(darwin.HidePanel)
 		}
@@ -694,6 +718,7 @@ func (r *panelRenderer) onState(m *core.Model, o *core.Order, sel core.Selection
 	// One small allocation per state change; the summon-path 0-alloc goal is V6.8's to enforce here.
 	tiles := make([]darwin.Tile, n)
 	reqs := make([]darwin.ThumbRequest, n)
+	ids := make([]core.WindowID, n)
 	for i := 0; i < n; i++ {
 		w := m.At(o.Rows[i])
 		f := res.Tiles[i]
@@ -707,7 +732,9 @@ func (r *panelRenderer) onState(m *core.Model, o *core.Order, sel core.Selection
 			Window: w.ID, Tile: i,
 			Width: f.W * res.Scale, Height: f.H * res.Scale,
 		}
+		ids[i] = w.ID
 	}
+	r.tileIDs.Store(&ids)
 
 	pw, ph := res.Panel.W, res.Panel.H
 	first := !r.shown
