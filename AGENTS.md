@@ -1,7 +1,7 @@
 # GoTab — working agreement
 
 A macOS window switcher in Go, built from scratch; nothing is inherited from any existing install.
-**Status: Phases 0–5 complete; Phase 6 (verification) is next.**
+**Status: Phases 0–5 complete; v0.2.1 shipped through the release automation (V6.12). Phase 6 (verification) is next.**
 
 ## Read these first
 
