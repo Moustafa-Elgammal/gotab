@@ -1,25 +1,32 @@
 name: Notarize
 
-# OPT-IN, DORMANT UNTIL YOU ADD APPLE SECRETS. release.yml still cuts every tag as an ad-hoc build;
-# nothing here runs on a tag push. Run this by hand (Actions → Notarize → Run workflow) AFTER a
-# release exists and the secrets below are set. It rebuilds GoTab.app, re-signs it with a Developer
-# ID Application certificate + the hardened runtime, submits it to Apple's notary service, staples
-# the ticket, and REPLACES that release's GoTab-<tag>.zip / .sha256 with the notarized build — so the
-# `curl | bash` installer and the download link then serve a bundle that launches with no Gatekeeper
-# prompt and needs no quarantine strip.
+# DISABLED until you enable it. release.yml still cuts every tag as an ad-hoc build; nothing here
+# runs on a tag push, and the job is gated on a repository VARIABLE so a manual "Run workflow" click
+# is a no-op (skipped, not failed) until you flip it. When enabled it rebuilds GoTab.app, re-signs it
+# with a Developer ID Application certificate + the hardened runtime, submits it to Apple's notary
+# service, staples the ticket, and REPLACES that release's GoTab-<tag>.zip / .sha256 with the
+# notarized build — so the `curl | bash` installer and the download link then serve a bundle that
+# launches with no Gatekeeper prompt and needs no quarantine strip.
 #
-# Secrets (repo → Settings → Secrets and variables → Actions):
-#   APPLE_CERT_P12_BASE64   base64 of a "Developer ID Application" cert exported as .p12
-#                             (`base64 -i cert.p12 | pbcopy`)
-#   APPLE_CERT_PASSWORD     the .p12 export password
-#   APPLE_TEAM_ID           your 10-character Team ID
-#   APPLE_NOTARY_USER       an Apple ID with notarization access
-#   APPLE_NOTARY_PASSWORD   an app-specific password for that Apple ID
-#                             (appleid.apple.com → Sign-In and Security → App-Specific Passwords)
+# To enable (repo → Settings → Secrets and variables → Actions):
 #
-# Cost: an Apple Developer Program membership ($99/yr). Until then this workflow fails its first step
-# with a clear message and changes nothing. See docs/DECISIONS.md D60; it closes the Gatekeeper half
-# of V6.7. To make it automatic later, add `release: { types: [published] }` to `on:` below.
+#   1. Variables tab → New repository variable:
+#        NOTARIZATION_ENABLED = true          # the on/off switch this job's `if:` checks
+#
+#   2. Secrets tab → New repository secret (all five):
+#        APPLE_CERT_P12_BASE64   base64 of a "Developer ID Application" cert exported as .p12
+#                                  (`base64 -i cert.p12 | pbcopy`)
+#        APPLE_CERT_PASSWORD     the .p12 export password
+#        APPLE_TEAM_ID           your 10-character Team ID
+#        APPLE_NOTARY_USER       an Apple ID with notarization access
+#        APPLE_NOTARY_PASSWORD   an app-specific password for that Apple ID
+#                                  (appleid.apple.com → Sign-In and Security → App-Specific Passwords)
+#
+#   3. Then: Actions → Notarize → Run workflow, tag = the release to notarize.
+#
+# Cost: an Apple Developer Program membership ($99/yr). See docs/DECISIONS.md D60; running this once
+# closes the Gatekeeper half of V6.7. To make it automatic later, add `release: { types: [published] }`
+# to `on:` below (the `if:` gate still protects it until the variable is set).
 
 on:
   workflow_dispatch:
@@ -32,6 +39,9 @@ permissions: {}
 
 jobs:
   notarize:
+    # The kill switch. Skipped (not failed) until you create the repository variable
+    # NOTARIZATION_ENABLED = true. See this file's header.
+    if: ${{ vars.NOTARIZATION_ENABLED == 'true' }}
     runs-on: macos-15
     permissions:
       contents: write # gh release upload --clobber

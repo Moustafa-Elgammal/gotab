@@ -1142,9 +1142,11 @@ Append one line per session. Newest last. This is how a cold session learns what
   cursor and runs the shared `activateSelection()` (raise + hide) factored out of `Activate`.
   `cmd/gotab` wires `darwin.OnTileActivate`. No `internal/core` change; `BenchmarkHandleGesture` still
   0 allocs/op. `check.sh` + `build.sh` (minos 12.0) green. Folded into V6.10's human checklist.
-- `2026-09-08` — **Opt-in notarization workflow (D60).** `.github/workflows/notarize.yml`, run by
-  hand: Developer ID re-sign + hardened runtime → `notarytool` → `stapler staple` → replace the
-  release's zip/`.sha256` with the notarized build. Dormant until five `APPLE_*` secrets are set
-  (needs an Apple Developer membership); `release.yml` is untouched and still cuts the ad-hoc build
-  on every tag. Closes the Gatekeeper half of **V6.7** once run — until then `get.sh`'s
-  quarantine strip (D57) is what keeps the one-liner working.
+- `2026-09-08` — **Notarization workflow — present but disabled (D60).** `.github/workflows/notarize.yml`:
+  `workflow_dispatch` only, and the job is `if: ${{ vars.NOTARIZATION_ENABLED == 'true' }}` so a
+  manual run is skipped (not failed) until that repo variable exists. When on: Developer ID re-sign
+  + hardened runtime → `notarytool` → `stapler staple` → replace the release's zip/`.sha256` with
+  the notarized build. Enabling needs the `NOTARIZATION_ENABLED` variable + five `APPLE_*` secrets
+  (and an Apple Developer membership). `release.yml` is untouched and still cuts the ad-hoc build on
+  every tag; `get.sh`'s quarantine strip (D57) keeps the one-liner working until this is run, which
+  closes the Gatekeeper half of **V6.7**.

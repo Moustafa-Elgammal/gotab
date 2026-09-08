@@ -2076,8 +2076,10 @@ D39 scoped the release to check-only: ad-hoc signature, no notarization, `script
 download quarantine so the one-liner still works (D57). That is the right default for a project with
 no paid Apple membership. This adds the upgrade path without disturbing it.
 
-**`notarize.yml` is `workflow_dispatch` only** — it never runs on a tag push, so `release.yml` keeps
-cutting the ad-hoc build exactly as before. Run by hand after a release exists, it: rebuilds
+**`notarize.yml` is `workflow_dispatch` only AND gated OFF by a repository variable.** It never runs
+on a tag push, so `release.yml` keeps cutting the ad-hoc build exactly as before; and the job carries
+`if: ${{ vars.NOTARIZATION_ENABLED == 'true' }}`, so even a manual "Run workflow" click is a no-op —
+the job is **skipped, not failed** — until that variable is created. When enabled it: rebuilds
 `GoTab.app` at the tag's version, re-signs with a **Developer ID Application** certificate and the
 **hardened runtime** (`--options runtime` — the notarization requirement; the weak-linked
 ScreenCaptureKit is Apple-signed so library validation needs no entitlement), submits to
@@ -2085,10 +2087,11 @@ ScreenCaptureKit is Apple-signed so library validation needs no entitlement), su
 `GoTab-<tag>.zip` + `.sha256` over the ad-hoc ones. The installer and the download link then serve a
 build that launches with no Gatekeeper prompt.
 
-**Dormant until five secrets exist** (`APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD`,
-`APPLE_TEAM_ID`, `APPLE_NOTARY_USER`, `APPLE_NOTARY_PASSWORD`): the first step checks them and exits
-with a clear error if any is missing, changing nothing. The prerequisite is an Apple Developer
-Program membership ($99/yr) — the owner's call, not a code change.
+**Enabling it takes one variable + five secrets:** repository variable `NOTARIZATION_ENABLED = true`
+(the kill switch the `if:` checks), then secrets `APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD`,
+`APPLE_TEAM_ID`, `APPLE_NOTARY_USER`, `APPLE_NOTARY_PASSWORD` (a preflight step names any that are
+missing). The prerequisite is an Apple Developer Program membership ($99/yr) — the owner's call, not
+a code change.
 
 **Closes the Gatekeeper half of V6.7** once run: a notarized, stapled bundle is what makes
 "launches on a clean account without a right-click → Open" true by construction rather than by the
