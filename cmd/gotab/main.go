@@ -56,6 +56,7 @@ func main() {
 	checkUpdate := flag.Bool("check-update", false, "ask the release feed whether a newer GoTab is out, and exit")
 	timingMode := flag.Bool("timing", false, "V6.3 scaffold: drive headless summons and report summon→first-frame latency, then exit")
 	timingN := flag.Int("timing-n", 30, "with -timing: how many summons to measure")
+	demoMode := flag.Bool("demo", false, "with -switch: skip the hotkey, script a summon that holds — for an offscreen / accessibility-tree inspection")
 	flag.Parse()
 
 	if *showVersion {
@@ -96,8 +97,8 @@ func main() {
 	if *settingsMode {
 		os.Exit(runSettings())
 	}
-	if *switchMode {
-		os.Exit(runSwitcher())
+	if *switchMode || *demoMode {
+		os.Exit(runSwitcher(*demoMode))
 	}
 	if *timingMode {
 		os.Exit(runTiming(*timingN))
@@ -106,7 +107,7 @@ func main() {
 	// Double-clicked from Finder there are no flags, and the switcher is what the user wants — a
 	// usage message they cannot see would just be an app that does nothing. From a shell, print help.
 	if runningInBundle() {
-		os.Exit(runSwitcher())
+		os.Exit(runSwitcher(false))
 	}
 	fmt.Fprintf(os.Stderr, "gotab %s: pass -switch, -settings, -permissions, -watch, -prefs, -check or -check-update.\n", version)
 	os.Exit(1)
@@ -484,7 +485,7 @@ func watchWindows() int {
 // runSwitcher brings the whole switcher up: the panel and its appearance, the event loop, the
 // Accessibility observers, a thumbnail prefetcher, the ⌥⇥ tap, and — on the main thread — the AppKit
 // run loop that makes all of it composite. Settings come from the CFPreferences domain (P4.1).
-func runSwitcher() int {
+func runSwitcher(demo bool) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
@@ -532,11 +533,17 @@ func runSwitcher() int {
 	// the tap thread already did (hotkey.h). Without the Accessibility grant the tap cannot install,
 	// and the scripted demo stands in so the render pipeline is still exercised.
 	hotkeyOK := false
-	if err := darwin.StartHotkey(p.HotkeyKeyCode, p.HotkeyModifiers, func(g darwin.Gesture) { postGesture(l, g) }); err != nil {
-		fmt.Fprintf(os.Stderr, "gotab: hotkey unavailable (%v) — scripting a demo summon instead\n", err)
+	switch {
+	case demo:
+		fmt.Fprintln(os.Stderr, "gotab: -demo — scripted summon, no hotkey (panel summons and holds)")
 		go demoDriver(ctx, l)
-	} else {
-		hotkeyOK = true
+	default:
+		if err := darwin.StartHotkey(p.HotkeyKeyCode, p.HotkeyModifiers, func(g darwin.Gesture) { postGesture(l, g) }); err != nil {
+			fmt.Fprintf(os.Stderr, "gotab: hotkey unavailable (%v) — scripting a demo summon instead\n", err)
+			go demoDriver(ctx, l)
+		} else {
+			hotkeyOK = true
+		}
 	}
 
 	// Shutdown ordering matters: drain the prefetcher and observers while the main queue is still

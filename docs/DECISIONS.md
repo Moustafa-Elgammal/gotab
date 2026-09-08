@@ -1746,3 +1746,33 @@ only 2–3 tiles. Neither is expected to move the verdict.
 
 **End to end:** ⌥⇥ delivery is V6.1's 3.2 ms worst case (D45); ⌥⇥ → pixels ≈ 3.2 + 15.25 ≈ ~18.5 ms
 p95, comfortably inside 100 ms. The Phase 0 summon budget is met.
+
+---
+
+## D51 · V6.10 — the switcher's per-tile accessibility is right; the container label is at risk — 2026-09-08
+
+P5.2 built the panel's accessibility tree against the AppKit API and it had never been inspected on a
+machine (D41). `gotab -switch -demo` (a new flag: skip the hotkey, script a summon that holds and
+cycles) puts the panel up offscreen; its tree was walked with System Events — the
+Accessibility-Inspector substitute V6.10's contract allows. **No VoiceOver: announcements were not
+heard, so this is the structural half only.**
+
+**Right, verified live:**
+
+- Each tile is `AXButton` role.
+- Each tile's label is exactly `"<title>, <app>"` — e.g. `"gotab, GoLand"`, `"New Message, Mail"`.
+- Exactly one tile carries `AXSelected = true`, and it advances on every demo cycle (sampled three
+  in a row: Chrome → GoLand → Mail), each with the correct label. The selected-child machinery
+  fires; whether VoiceOver *speaks* it every time is the remaining human check.
+- Tile press is a no-op (`accessibilityPerformPress` → `NO`), as V6.10 §6 wants.
+
+**At risk — needs the VoiceOver run to settle:** the `"Window switcher"` label is set on
+`GTTileView`, which returns `isAccessibilityElement = NO`. Live, the tile buttons are **direct
+children of the panel window**, the window's `AXTitle` is **empty**, and its subrole is
+`AXSystemDialog` — nothing in the tree carries the text "Window switcher". A screen reader may voice
+the group through the parent chain or may land the user on an unlabelled system dialog. If it is
+silent, the fix is P5.2's: put the label on the window/panel, or make the container a real element.
+
+**Not done:** the `gotab -settings` control labels (System Events' `entire contents` hangs on that
+window — Accessibility Inspector or VoiceOver needed), and every announcement. V6.10 stays
+**partial**.
