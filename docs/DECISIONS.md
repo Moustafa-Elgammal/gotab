@@ -2067,3 +2067,30 @@ hook without touching `panel.h`:
 No `panel.h` / `internal/core/api.go` change. `check.sh` + `build.sh` (minos 12.0) green. **V6.10's
 §6 changes:** the tile press is no longer a no-op to confirm — a VoiceOver press must raise that
 window and dismiss the panel, the same end state as releasing ⌥.
+
+---
+
+## D60 · A notarization path exists, opt-in and dormant — `.github/workflows/notarize.yml` — 2026-09-08
+
+D39 scoped the release to check-only: ad-hoc signature, no notarization, `scripts/get.sh` strips the
+download quarantine so the one-liner still works (D57). That is the right default for a project with
+no paid Apple membership. This adds the upgrade path without disturbing it.
+
+**`notarize.yml` is `workflow_dispatch` only** — it never runs on a tag push, so `release.yml` keeps
+cutting the ad-hoc build exactly as before. Run by hand after a release exists, it: rebuilds
+`GoTab.app` at the tag's version, re-signs with a **Developer ID Application** certificate and the
+**hardened runtime** (`--options runtime` — the notarization requirement; the weak-linked
+ScreenCaptureKit is Apple-signed so library validation needs no entitlement), submits to
+`notarytool --wait`, `stapler staple`s the ticket, and `gh release upload --clobber`s the notarized
+`GoTab-<tag>.zip` + `.sha256` over the ad-hoc ones. The installer and the download link then serve a
+build that launches with no Gatekeeper prompt.
+
+**Dormant until five secrets exist** (`APPLE_CERT_P12_BASE64`, `APPLE_CERT_PASSWORD`,
+`APPLE_TEAM_ID`, `APPLE_NOTARY_USER`, `APPLE_NOTARY_PASSWORD`): the first step checks them and exits
+with a clear error if any is missing, changing nothing. The prerequisite is an Apple Developer
+Program membership ($99/yr) — the owner's call, not a code change.
+
+**Closes the Gatekeeper half of V6.7** once run: a notarized, stapled bundle is what makes
+"launches on a clean account without a right-click → Open" true by construction rather than by the
+quarantine strip. Until then V6.7's clean-account check stands against the ad-hoc build. To make
+notarization automatic later, add `release: { types: [published] }` to the workflow's `on:`.
