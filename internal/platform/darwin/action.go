@@ -36,11 +36,12 @@ func actionError(op string, s C.gt_status) error {
 // A minimized window is unminimized first, and a hidden application (Cmd-H) is unhidden. Selecting a
 // minimized window and seeing nothing happen is the failure mode this exists to prevent.
 //
-// If the id cannot be resolved to a window but its owning application is still running — a window the
-// enumeration join surfaced because Accessibility could not see it, typically on another Space — the
-// application is brought forward and Raise returns nil (P7.1, D46): the specific window is not
-// reordered, but the user reaches what they selected. ErrNoWindow is returned only when the owning
-// process is gone too, and the caller should then drop the window from the model.
+// If the id cannot be resolved to a window — one the enumeration join surfaced because Accessibility
+// could not see it, typically on another Space — GoTab first tries to switch to that Space (P7.3, a
+// private-API best effort that may be unavailable) and resolve again; failing that, if the owning
+// application is still running it is brought forward and Raise returns nil (P7.1, D46): the specific
+// window is not reordered, but the user reaches what they selected. ErrNoWindow is returned only when
+// the owning process is gone too, and the caller should then drop the window from the model.
 //
 // Returns ErrNotTrusted without the Accessibility grant, and ErrTimeout if the owning application did
 // not answer within the messaging timeout — an app that is beachballing or paused in a debugger.

@@ -32,6 +32,12 @@ typedef CFStringRef (*gt_fn_menubar_display)(gt_cgs_connection);
 typedef uint64_t (*gt_fn_display_space)(gt_cgs_connection, CFStringRef);
 typedef CFArrayRef (*gt_fn_spaces_for_windows)(gt_cgs_connection, uint32_t, CFArrayRef);
 typedef CFArrayRef (*gt_fn_managed_display_spaces)(gt_cgs_connection);
+// P7.3 only. CGSCopyManagedDisplayForSpace names the display a Space lives on; SetCurrentSpace makes
+// it current on that display; Show/HideSpaces drive the visual transition and are best-effort -- the
+// pointer moves without them, some macOS versions just do not animate the reveal.
+typedef CFStringRef (*gt_fn_display_for_space)(gt_cgs_connection, uint64_t);
+typedef void (*gt_fn_set_current_space)(gt_cgs_connection, CFStringRef, uint64_t);
+typedef void (*gt_fn_show_hide_spaces)(gt_cgs_connection, CFArrayRef);
 
 static struct {
     bool loaded;
@@ -41,6 +47,10 @@ static struct {
     gt_fn_display_space display_space;
     gt_fn_spaces_for_windows spaces_for_windows;
     gt_fn_managed_display_spaces managed_display_spaces;
+    gt_fn_display_for_space display_for_space;
+    gt_fn_set_current_space set_current_space;
+    gt_fn_show_hide_spaces show_spaces;
+    gt_fn_show_hide_spaces hide_spaces;
 } g_sl;
 
 // Both spellings of one symbol. Returns NULL if neither is there, which every caller treats as
@@ -73,6 +83,17 @@ static bool sl_load(void) {
             sl_sym(h, "CGSCopySpacesForWindows", "SLSCopySpacesForWindows");
         g_sl.managed_display_spaces = (gt_fn_managed_display_spaces)
             sl_sym(h, "CGSCopyManagedDisplaySpaces", "SLSCopyManagedDisplaySpaces");
+        // P7.3 write path. Loaded here but not part of g_sl.loaded's minimum: the read queries above
+        // must work for the rest of the package, the Space switch is an optional extra and
+        // gt_space_switch_to_window checks its own symbols.
+        g_sl.display_for_space = (gt_fn_display_for_space)
+            sl_sym(h, "CGSCopyManagedDisplayForSpace", "SLSCopyManagedDisplayForSpace");
+        g_sl.set_current_space = (gt_fn_set_current_space)
+            sl_sym(h, "CGSManagedDisplaySetCurrentSpace", "SLSManagedDisplaySetCurrentSpace");
+        g_sl.show_spaces = (gt_fn_show_hide_spaces)
+            sl_sym(h, "CGSShowSpaces", "SLSShowSpaces");
+        g_sl.hide_spaces = (gt_fn_show_hide_spaces)
+            sl_sym(h, "CGSHideSpaces", "SLSHideSpaces");
         g_sl.loaded = g_sl.main_connection != NULL;
     });
     return g_sl.loaded;
@@ -210,4 +231,84 @@ gt_status gt_space_list(uint64_t *buf, int32_t cap, int32_t *out_n, int32_t *out
     *out_n = stored;
     *out_total = total;
     return GT_OK;
+}
+
+// ---------------------------------------------------------------------------
+// P7.3 -- the one write here, and a private-API bet (see this file's header comment)
+// ---------------------------------------------------------------------------
+
+// Builds a one-element CFArray holding an int64 CFNumber, or NULL. Caller releases.
+static CFArrayRef one_number_array(uint64_t v) {
+    CFNumberRef n = CFNumberCreate(NULL, kCFNumberSInt64Type, &v);
+    if (!n) return NULL;
+    CFArrayRef arr = CFArrayCreate(NULL, (const void *[]){ n }, 1, &kCFTypeArrayCallBacks);
+    CFRelease(n);
+    return arr;
+}
+
+// If window wid is on a Space other than the one the user is looking at, make that Space current so
+// gt_window_raise can then resolve the window through Accessibility (kAXWindowsAttribute only lists
+// the current Space -- D20/D46). Returns 1 only if gt_current_space() actually changed to the target;
+// the caller retries the AX resolve on 1 and falls through to P7.1's app-only activation on 0.
+//
+// Every step is guarded: a return of 0 covers SkyLight absent, the private write symbols absent, the
+// window's Space unknown or already current, or the switch not taking. Nothing here blocks -- the
+// calls are WindowServer round trips, not waits -- so a wedged switch degrades rather than hangs.
+//
+// PRIVATE API and NOT VERIFIED: this machine has one Space (D24), so the cross-Space path is reasoned
+// from how yabai and Hammerspoon drive CGSManagedDisplaySetCurrentSpace, not observed. A macOS
+// release that drops these symbols turns this back into P7.1's behaviour. See docs/tasks/P7.3.md; a
+// human confirms it under V6.2.
+int gt_space_switch_to_window(uint32_t wid) {
+    if (!sl_load()) return 0;
+    gt_cgs_connection cid = g_sl.main_connection ? g_sl.main_connection() : 0;
+    if (!cid || !g_sl.spaces_for_windows || !g_sl.set_current_space || !g_sl.display_for_space) {
+        return 0;
+    }
+
+    uint64_t current = gt_current_space();
+    if (current == 0) return 0;
+
+    // Which Space is the window on? Ask for the full mask so a window on another Space still reports
+    // it. If any reported Space is the current one the window is already visible -- nothing to do.
+    uint64_t target = 0;
+    int32_t w = (int32_t)wid;
+    CFNumberRef num = CFNumberCreate(NULL, kCFNumberSInt32Type, &w);
+    if (!num) return 0;
+    CFArrayRef one = CFArrayCreate(NULL, (const void *[]){ num }, 1, &kCFTypeArrayCallBacks);
+    CFRelease(num);
+    if (!one) return 0;
+    CFArrayRef spaces = g_sl.spaces_for_windows(cid, GT_SPACE_MASK_ALL, one);
+    CFRelease(one);
+    if (!spaces) return 0;
+    CFIndex n = CFArrayGetCount(spaces);
+    for (CFIndex i = 0; i < n; i++) {
+        CFNumberRef s = (CFNumberRef)CFArrayGetValueAtIndex(spaces, i);
+        if (!s || CFGetTypeID(s) != CFNumberGetTypeID()) continue;
+        uint64_t v = 0;
+        if (!CFNumberGetValue(s, kCFNumberSInt64Type, &v) || v == 0) continue;
+        if (v == current) { target = 0; break; }  // already on-screen
+        if (target == 0) target = v;
+    }
+    CFRelease(spaces);
+    if (target == 0 || target == current) return 0;
+
+    CFStringRef display = g_sl.display_for_space(cid, target);
+    if (!display) return 0;
+
+    // Show/Hide drive the reveal animation and are best-effort: without them the current-Space
+    // pointer still moves, some macOS versions just cut rather than animate.
+    if (g_sl.hide_spaces) {
+        CFArrayRef arr = one_number_array(current);
+        if (arr) { g_sl.hide_spaces(cid, arr); CFRelease(arr); }
+    }
+    g_sl.set_current_space(cid, display, target);
+    if (g_sl.show_spaces) {
+        CFArrayRef arr = one_number_array(target);
+        if (arr) { g_sl.show_spaces(cid, arr); CFRelease(arr); }
+    }
+    CFRelease(display);
+
+    // Confirm the pointer moved before telling the caller the retry is worth it.
+    return gt_current_space() == target ? 1 : 0;
 }

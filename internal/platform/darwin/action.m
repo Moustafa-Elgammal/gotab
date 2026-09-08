@@ -6,6 +6,7 @@
 #import <ApplicationServices/ApplicationServices.h>
 #import <CoreGraphics/CoreGraphics.h>
 #include "action.h"
+#include "space.h"  // P7.3: gt_space_switch_to_window, the private-API Space follow
 
 // PRIVATE API. Declared again here rather than shared with shim.m: shim.m is frozen and exports no
 // header of its own, and a duplicate extern declaration of the same symbol is free. See the long
@@ -252,6 +253,17 @@ gt_status gt_window_raise(uint32_t wid) {
     pid_t pid = 0;
     gt_status st = GT_OK;
     AXUIElementRef win = copy_window_element((CGWindowID)wid, &pid, &st);
+
+    if (!win && st == GT_ERR_NO_WINDOW && gt_space_switch_to_window(wid)) {
+        // P7.3 (optional, D46): the window was simply on another Space, where kAXWindowsAttribute
+        // cannot see it. SkyLight put that Space in front; resolve again so the real window is raised
+        // rather than only its application. gt_space_switch_to_window returns 0 -- and this is
+        // skipped -- whenever the private symbols are absent, the window is already on the current
+        // Space, or the switch did not take, so P7.1's fallback below is unaffected. Unverified:
+        // written on a one-Space machine (docs/tasks/P7.3.md, V6.2).
+        win = copy_window_element((CGWindowID)wid, &pid, &st);
+    }
+
     if (!win) {
         // P7.1 (D46): the enumeration join (window.go) deliberately offers windows Accessibility
         // cannot see -- typically on another Space -- and this is the action path inheriting D20's
