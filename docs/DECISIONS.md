@@ -1968,3 +1968,39 @@ after 1.0, not waved through.
 `v1.0.0`, example zip → `GoTab-v1.0.0.zip`), `AGENTS.md` status, and the Phase 6 note above. The
 `v1.0.0` annotated tag drives `.github/workflows/release.yml` the same as every tag since `v0.2.0`
 (D42).
+
+---
+
+## D57 · A `curl | bash` installer — `scripts/get.sh` — 2026-09-08
+
+`./scripts/install.sh` builds from source (Go + Xcode CLT). For anyone who just wants the app,
+`scripts/get.sh` installs the latest **release**:
+
+```
+curl -fsSL https://raw.githubusercontent.com/Moustafa-Elgammal/gotab/main/scripts/get.sh | bash
+curl -fsSL https://elgx.me/gotab/install.sh | bash          # release.yml copies get.sh to _site/install.sh
+```
+
+**How it resolves a version without the GitHub API.** It reads the project's own feed —
+`https://elgx.me/gotab/latest.json` (the same `FeedURL` `gotab -check-update` uses, D39), with the
+Pages mirror and finally the unauthenticated GitHub API as fallbacks — and pulls `"version"` out with
+`sed`. No `jq`, no API rate limit on the common path. The resolved string is shape-checked
+(`[0-9A-Za-z.-]` only) before it is interpolated into a download URL.
+
+**Integrity.** Downloads `GoTab-v<version>.zip` **and** `.zip.sha256` (both release assets since
+D42), compares `shasum -a 256` explicitly, and aborts on mismatch. Unpacks with `ditto -x -k` so the
+ad-hoc signature survives, then `codesign --verify --strict` before and after the copy into place.
+
+**Quarantine — stripped by default, loudly.** The bundle is ad-hoc signed and **not notarized**
+(D39), so a downloaded copy is Gatekeeper-blocked on first launch unless the user knows the
+right-click → Open trick — which makes a one-liner that "doesn't work". `get.sh` runs
+`xattr -dr com.apple.quarantine` on the installed app and prints, in the same breath, that the build
+is un-notarized and that `GOTAB_KEEP_QUARANTINE=1` opts out. The reasoning: someone who has already
+piped this script to `bash` has made the trust decision; leaving the app un-launchable afterward
+helps no one. The escape hatch stays for people who want to inspect it first.
+
+**Knobs:** `GOTAB_VERSION` (pin a version), `GOTAB_APPS` (install dir; auto-falls back to
+`~/Applications` if `/Applications` is not writable and it was not set), `GOTAB_KEEP_QUARANTINE`.
+`--uninstall` / `--uninstall --purge` mirror `scripts/uninstall.sh`. Base-system tools only
+(`curl`, `ditto`, `shasum`, `xattr`, `codesign`); the gate does not lint shell, so it is checked
+with `bash -n` and by running it end to end against the live release.

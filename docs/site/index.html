@@ -284,18 +284,21 @@
 <section id="install">
   <div class="wrap">
     <h2>Getting started</h2>
-    <p class="lead">Requires macOS&nbsp;12 or newer, plus Go and the Xcode command line tools to build from source.</p>
+    <p class="lead">macOS&nbsp;12 or newer. The one-liner needs nothing else; building from source needs Go and the Xcode command line tools.</p>
     <div class="two-col">
       <div>
-        <pre><span class="c"># build, package, install to /Applications, print the next steps</span>
+        <pre><span class="c"># download the latest signed release, verify it, install to /Applications</span>
+curl -fsSL https://elgx.me/gotab/install.sh | bash</pre>
+        <p class="note">
+          Re-run to upgrade; <code>… | bash -s -- --uninstall</code> removes it. The bundle is
+          ad-hoc signed, not notarized, so the script strips the download quarantine — the same
+          trust you extend by piping it to <code>bash</code>. Set <code>GOTAB_KEEP_QUARANTINE=1</code>
+          to keep it and use right-click&nbsp;→&nbsp;<em>Open</em> instead.
+        </p>
+        <pre><span class="c"># or build it yourself</span>
 git clone https://github.com/Moustafa-Elgammal/gotab
 cd gotab
 ./scripts/install.sh</pre>
-        <p class="note">
-          Or grab <a href="https://github.com/Moustafa-Elgammal/gotab/releases/latest"><code>GoTab-v1.0.0.zip</code></a>
-          from the releases page. The bundle is ad-hoc signed, so the first launch of a downloaded
-          copy needs a right-click&nbsp;→&nbsp;<em>Open</em> (notarization is future work).
-        </p>
       </div>
       <div>
         <p class="note"><strong style="color:var(--text)">Two permissions, once:</strong></p>

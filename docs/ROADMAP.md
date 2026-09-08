@@ -1113,3 +1113,11 @@ Append one line per session. Newest last. This is how a cold session learns what
   committed follow-up, not dropped** — no accessibility code is removed. Site pill → `v1.0.0`,
   download example → `GoTab-v1.0.0.zip`, `README.md` + `AGENTS.md` status → `v1.0.0`. No code change
   in this commit beyond the version/status strings.
+- `2026-09-08` — **`scripts/get.sh` — a `curl | bash` installer (D57).** Installs the latest
+  *release* (no Go/Xcode): resolves the version from `latest.json`, downloads the zip + `.sha256`,
+  verifies the checksum, `ditto`-unpacks (signature intact), installs to `/Applications` (or
+  `GOTAB_APPS`), and strips `com.apple.quarantine` by default with a loud un-notarized note
+  (`GOTAB_KEEP_QUARANTINE=1` opts out). `--uninstall[ --purge]` mirrors `uninstall.sh`.
+  `release.yml` also copies it to `_site/install.sh` so `https://elgx.me/gotab/install.sh` serves it;
+  `raw.githubusercontent.com/.../main/scripts/get.sh` is the always-current copy. README + site
+  install sections lead with the one-liner. Tested end to end against the live `v1.0.0` release.

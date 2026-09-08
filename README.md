@@ -13,16 +13,31 @@ a macOS 12 host — and full VoiceOver support continue as point releases (D56).
 
 ## Install
 
+The fast way — downloads the latest signed release, verifies its SHA-256, and installs to
+`/Applications` (macOS 12+; no Go or Xcode needed):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Moustafa-Elgammal/gotab/main/scripts/get.sh | bash
+```
+
+Same script, shorter URL: `curl -fsSL https://elgx.me/gotab/install.sh | bash`. Re-run to upgrade.
+`GOTAB_APPS`, `GOTAB_VERSION`, and `GOTAB_KEEP_QUARANTINE` tune it; `… | bash -s -- --uninstall`
+removes it. The published bundle is ad-hoc signed, not notarized (D39), so the script strips the
+download quarantine — the same trust you extend by piping it to `bash`; set `GOTAB_KEEP_QUARANTINE=1`
+to keep it and use right-click → Open instead.
+
+### From source
+
 Requires macOS 12+, Go, and Xcode command line tools.
 
 ```bash
-git clone <this repo> && cd gotab
+git clone https://github.com/Moustafa-Elgammal/gotab && cd gotab
 ./scripts/install.sh
 ```
 
-The installer builds a universal binary, packages `GoTab.app`, installs it to `/Applications`, and then
-tells you how to grant the two permissions macOS requires (Accessibility, Screen Recording). It is safe to
-re-run — it upgrades in place.
+It builds a universal binary, packages `GoTab.app`, installs it to `/Applications`, and tells you how
+to grant the two permissions macOS requires (Accessibility, Screen Recording). Safe to re-run — it
+upgrades in place.
 
 ## For developers
 

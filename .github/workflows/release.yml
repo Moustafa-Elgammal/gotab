@@ -96,6 +96,9 @@ jobs:
           # The overview page (docs/site/) is served here too, next to latest.json, so the
           # Pages URL renders the same page as https://elgx.me/gotab/ (D48 / D49).
           cp docs/site/index.html docs/site/gotab-icon.png _site/
+          # The one-line installer, also reachable at the short URL https://elgx.me/gotab/install.sh
+          # (raw.githubusercontent.com/.../main/scripts/get.sh is the always-current copy).
+          cp scripts/get.sh _site/install.sh
           echo "--- _site/latest.json ---"
           cat _site/latest.json
           echo "--- _site contents ---"
