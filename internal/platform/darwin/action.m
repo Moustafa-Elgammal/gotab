@@ -116,6 +116,11 @@ static AXUIElementRef copy_window_element(CGWindowID wid, pid_t *out_pid, gt_sta
     *out_status = GT_ERR_NO_WINDOW;
 
     pid_t owner = pid_for_window(wid);
+    // Hand back the owning pid even when no element resolves. A cg-only window (window.go's
+    // OriginCGOnly) has no AXUIElement to return here, but gt_window_raise's P7.1 fallback still needs
+    // to know whose application to bring forward. A hit on the all-applications scan below overwrites
+    // this with the pid that actually answered.
+    *out_pid = owner;
     if (owner > 0) {
         AXError err = kAXErrorSuccess;
         AXUIElementRef win = copy_window_in_app(owner, wid, &err);
@@ -196,6 +201,25 @@ static void activate_app(pid_t pid) {
     }
 }
 
+// P7.1 (D46): is pid a running application we could still bring forward? A cg-only window
+// (window.go's OriginCGOnly) has no AXUIElement on the current Space, so gt_window_raise cannot order
+// the specific window -- but if the owning application is alive, activating it puts the user where
+// they were headed, which beats returning "no such window" for a tile the enumeration join
+// deliberately offered. Once the process is gone this returns false and the caller reports
+// GT_ERR_NO_WINDOW so P7.2 can prune the entry.
+//
+// runningApplicationWithProcessIdentifier: returns nil for a pid that is not a live GUI application
+// -- terminated, or never one -- which is exactly the line wanted. kill(pid, 0) would also spot a
+// live pid but not whether activate_app could do anything with it.
+static bool app_is_alive(pid_t pid) {
+    if (pid <= 0) return false;
+    @autoreleasepool {
+        NSRunningApplication *app =
+            [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+        return app != nil && !app.isTerminated;
+    }
+}
+
 // Every entry point has the same shape: refuse early without the grant, resolve the id to an element,
 // act, release. Written out rather than hidden behind a macro because there are four of them and the
 // middle of each one differs.
@@ -228,7 +252,20 @@ gt_status gt_window_raise(uint32_t wid) {
     pid_t pid = 0;
     gt_status st = GT_OK;
     AXUIElementRef win = copy_window_element((CGWindowID)wid, &pid, &st);
-    if (!win) return st;
+    if (!win) {
+        // P7.1 (D46): the enumeration join (window.go) deliberately offers windows Accessibility
+        // cannot see -- typically on another Space -- and this is the action path inheriting D20's
+        // blind spot: kAXWindowsAttribute does not list them, so there is no element to raise. If the
+        // owning application is still running, activate it: the specific window is not reordered, but
+        // the user reaches the app they aimed at, which is the visible half of the switch. Only
+        // GT_ERR_NO_WINDOW takes this path -- a timeout or a revoked grant is a different answer and
+        // is returned as-is. A dead owner stays GT_ERR_NO_WINDOW for P7.2 to prune.
+        if (st == GT_ERR_NO_WINDOW && app_is_alive(pid)) {
+            activate_app(pid);
+            return GT_OK;
+        }
+        return st;
+    }
 
     // Unminimize first: everything below is a no-op on a window that is still in the Dock, and a
     // switcher that selects a minimized window and does nothing visible is broken.

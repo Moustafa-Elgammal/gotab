@@ -38,6 +38,12 @@ enum {
 // nothing visible is broken, and the Dock's restore animation is the user-visible confirmation that
 // the switch happened. A hidden application (Cmd-H) is unhidden for the same reason.
 //
+// If the id will not resolve to an AXUIElement -- a window the enumeration join offered because
+// Accessibility could not see it, usually on another Space -- but its owning application is still
+// running, that application is activated and GT_OK is returned (P7.1, D46): the exact window is not
+// reordered, but the app the user picked comes forward. GT_ERR_NO_WINDOW is returned only when the
+// owning process is gone as well, which is the signal to prune the window from the model.
+//
 // Safe from any thread. AXUIElement calls are thread-safe by design, and NSRunningApplication is
 // documented as such -- gt_ax_window_list already relies on the latter.
 gt_status gt_window_raise(uint32_t wid);

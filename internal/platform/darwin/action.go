@@ -36,10 +36,15 @@ func actionError(op string, s C.gt_status) error {
 // A minimized window is unminimized first, and a hidden application (Cmd-H) is unhidden. Selecting a
 // minimized window and seeing nothing happen is the failure mode this exists to prevent.
 //
-// Returns ErrNoWindow if the window closed between enumeration and now, ErrNotTrusted without the
-// Accessibility grant, and ErrTimeout if the owning application did not answer within the messaging
-// timeout — an app that is beachballing or paused in a debugger. Errors are sentinels; match with
-// errors.Is.
+// If the id cannot be resolved to a window but its owning application is still running — a window the
+// enumeration join surfaced because Accessibility could not see it, typically on another Space — the
+// application is brought forward and Raise returns nil (P7.1, D46): the specific window is not
+// reordered, but the user reaches what they selected. ErrNoWindow is returned only when the owning
+// process is gone too, and the caller should then drop the window from the model.
+//
+// Returns ErrNotTrusted without the Accessibility grant, and ErrTimeout if the owning application did
+// not answer within the messaging timeout — an app that is beachballing or paused in a debugger.
+// Errors are sentinels; match with errors.Is.
 //
 // Blocking: this is Mach IPC into another process and can take up to the messaging timeout. Call it
 // from the event-loop goroutine, never from a callback (docs/ARCHITECTURE.md#the-cgo-rule).
