@@ -1706,3 +1706,43 @@ workflow also copies it into the Pages artifact, so **`https://moustafa-elgammal
 renders the same page while still serving `latest.json` next to it for `gotab -check-update`. One
 source, two hosts; the version string in the page is updated by hand at release time (the download
 button points at `releases/latest`, which never goes stale).
+
+---
+
+## D50 · V6.3 — summon → pixels is ~15 ms warm, 7x inside the 100 ms budget — 2026-09-08
+
+The Phase 0 target "summon → pixels on screen < 100 ms" was budget-allocated but never timed end to
+end on the assembled app: drawing ~1.3 ms (D13), capture ~46 ms and off the summon path by design
+(D12), enumeration event-driven and not on the path either. V6.3 closes it.
+
+**Instrument.** `gotab -timing` (scaffold, `docs/tasks/V6.3.md`): the full switcher pipeline —
+`CreatePanel`, the event loop, the prefetcher, `panelRenderer` — minus the hotkey and the permission
+gate, with a driver that arms a one-shot `CATransaction` completion block in `gt_panel_show` and
+posts N summons through `Loop.Post`. Each sample is post → completion block (the frame handed to the
+render server — the same edge `spike/panel` measured, D13), in Go's monotonic clock. Inert in the
+shipped switcher: `g_timing_armed` starts 0 and `gotab -switch` never arms it.
+
+**Measured, host macOS 26.6.2, both grants, 2–3 windows open, 30 summons:**
+
+| | ms |
+|---|---|
+| cold (summon 1 after launch) | **74.24** |
+| warm min / median / p95 / max (n=29) | 1.83 / 8.43 / **15.25** / 19.89 |
+
+- **Warm p95 15.25 ms — PASS at ~15 % of budget.** 30/30 summons committed; no completion block
+  ever timed out.
+- The cold 74 ms is first-frame framework warm-up (CoreAnimation, first layer tree, font raster) —
+  D13 saw ~14 ms for the bare spike; the assembled app's first frame is heavier but still inside.
+  D5's "pay the cold cost at launch, not first summon" already covers this — the number is recorded,
+  not treated as a fail.
+- Median 8 ms with thumbnails present is itself evidence capture is **not** on the summon path: a
+  freshly captured thumbnail is ~46 ms (D12), so an 8 ms summon cannot be capturing. The prefetcher
+  does it ahead of time, as designed.
+
+**What is still owed** (V6.3 stays "partial" until then): a control run with **Screen Recording
+off**, to make the "capture is off the path" point by construction rather than by inference; and,
+ideally, a 30–50-window run — the draw path scales gently with tile count (D13) but this run had
+only 2–3 tiles. Neither is expected to move the verdict.
+
+**End to end:** ⌥⇥ delivery is V6.1's 3.2 ms worst case (D45); ⌥⇥ → pixels ≈ 3.2 + 15.25 ≈ ~18.5 ms
+p95, comfortably inside 100 ms. The Phase 0 summon budget is met.

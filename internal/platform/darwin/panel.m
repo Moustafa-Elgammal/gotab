@@ -13,9 +13,11 @@
 // Contract: docs/tasks/P3.1.md. panel.h is frozen; thumbnail.* is P3.3 and theme.* is P3.4.
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
+#include <stdatomic.h>
 #include <stdlib.h>
 #include <string.h>
 #include "panel.h"
+#include "timing.h" // V6.3 scaffold: gt_timing_arm / goTimingFrameCommitted. Inert unless armed.
 
 // ---------------------------------------------------------------------------
 // State. One panel per process; all of this is main-thread-only (panel.h THREADING).
@@ -39,6 +41,11 @@ static int32_t g_a11y_last_n = -1;
 
 // GT_MATERIAL_NONE until P3.4 sets one. Stored so a palette-only redraw keeps it.
 static int32_t g_material = GT_MATERIAL_NONE;
+
+// V6.3 scaffold. One-shot: gt_timing_arm() sets it, the next gt_panel_show consumes it. 0 in the
+// shipped switcher, which never arms it.
+static atomic_int g_timing_armed = 0;
+void gt_timing_arm(void) { atomic_store(&g_timing_armed, 1); }
 
 // A by-value copy of the tiles from the last gt_panel_show / gt_panel_update. The pointer Go hands in
 // is alive only for the duration of that call, but drawRect: runs on a later run-loop turn, so it
@@ -514,7 +521,17 @@ gt_status gt_panel_show(const gt_tile *tiles, int32_t n, int32_t panel_w, int32_
     // orderFrontRegardless, not orderFront: an Accessory app may not bring a window forward through
     // the ordinary path. The non-activating style mask keeps the app behind us frontmost -- P0.1
     // checked the frontmost pid was unchanged across a summon 20x (D13).
-    [g_panel orderFrontRegardless];
+    if (atomic_exchange(&g_timing_armed, 0)) {
+        // V6.3 scaffold. Same edge spike/panel measured (D13): the completion block fires when this
+        // transaction is handed to the render server -- the closest reachable thing to "pixels"
+        // without a display link. The app's own main run loop drains it; no nested pump.
+        [CATransaction begin];
+        [CATransaction setCompletionBlock:^{ goTimingFrameCommitted(); }];
+        [g_panel orderFrontRegardless];
+        [CATransaction commit];
+    } else {
+        [g_panel orderFrontRegardless];
+    }
     return GT_OK;
 }
 

@@ -16,9 +16,11 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 
@@ -52,6 +54,8 @@ func main() {
 	settingsMode := flag.Bool("settings", false, "open the settings window")
 	permMode := flag.Bool("permissions", false, "check the grants, explain any that are missing, and wait for them")
 	checkUpdate := flag.Bool("check-update", false, "ask the release feed whether a newer GoTab is out, and exit")
+	timingMode := flag.Bool("timing", false, "V6.3 scaffold: drive headless summons and report summon→first-frame latency, then exit")
+	timingN := flag.Int("timing-n", 30, "with -timing: how many summons to measure")
 	flag.Parse()
 
 	if *showVersion {
@@ -94,6 +98,9 @@ func main() {
 	}
 	if *switchMode {
 		os.Exit(runSwitcher())
+	}
+	if *timingMode {
+		os.Exit(runTiming(*timingN))
 	}
 
 	// Double-clicked from Finder there are no flags, and the switcher is what the user wants — a
@@ -324,11 +331,11 @@ func listWindows(raw, axOnly bool) int {
 	}
 
 	origins := e.Origins()
-	fmt.Printf("%d switchable windows\n\n", len(ws))
-	fmt.Printf("  %-8s %-7s %-5s %-5s %-24s %s\n", "ID", "PID", "FROM", "STATE", "APP", "TITLE")
+	fmt.Printf("%d switchable windows (current Space %d)\n\n", len(ws), darwin.CurrentSpace())
+	fmt.Printf("  %-8s %-7s %-6s %-5s %-5s %-24s %s\n", "ID", "PID", "SPACE", "FROM", "STATE", "APP", "TITLE")
 	for i, w := range ws {
-		fmt.Printf("  %-8d %-7d %-5s %-5s %-24.24s %.60s\n",
-			w.ID, w.App, origins[i], state(w.Flags), w.AppName, w.Title)
+		fmt.Printf("  %-8d %-7d %-6d %-5s %-5s %-24.24s %.60s\n",
+			w.ID, w.App, w.Space, origins[i], state(w.Flags), w.AppName, w.Title)
 	}
 
 	if e.MissingRecovery() {
@@ -661,6 +668,143 @@ func demoDriver(ctx context.Context, l *app.Loop) {
 			l.Post(app.Event{Kind: app.Cycle, Dir: core.Forward})
 		}
 	}
+}
+
+// runTiming is the V6.3 scaffold (docs/tasks/V6.3.md): the whole switcher render pipeline —
+// CreatePanel, the event loop, the prefetcher, the renderer — minus the hotkey and the permission
+// gate, driven by timingDriver instead of a real ⌥⇥. It measures summon → the panel's first frame
+// reaching the render server against the < 100 ms budget, then exits. Not wired into the shipped
+// switcher; nothing here runs unless -timing is passed.
+func runTiming(n int) int {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+
+	p := prefs.Load(darwin.Prefs{})
+
+	if err := darwin.CreatePanel(); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: %v\n", err)
+		return 1
+	}
+	darwin.SetAppearance(string(p.Appearance))
+	if err := darwin.ApplyTheme(); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: theme: %v\n", err)
+	}
+
+	l := app.New(128)
+	l.OnError = func(err error) { fmt.Fprintf(os.Stderr, "gotab: %v\n", err) }
+	l.Rules = p.Rules()
+
+	pf := darwin.NewPrefetcher(p.ThumbnailCacheSize)
+	r := &panelRenderer{opts: p.LayoutOpts(), pf: pf}
+	l.OnState = r.onState
+
+	// Event-driven enumeration must be live so a summon lays out a realistic tile count — but its
+	// cold cost is paid here, at launch, not on a summon (D5).
+	if err := darwin.StartObservers(l.Rescan); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: observers unavailable (%v)\n", err)
+	}
+
+	loopDone := make(chan error, 1)
+	go func() { loopDone <- l.Run(ctx) }()
+
+	go timingDriver(ctx, l, n, stop)
+
+	go func() {
+		<-loopDone
+		pf.Stop()
+		darwin.StopObservers()
+		darwin.OnMain(darwin.HidePanel)
+		darwin.StopRunLoop()
+	}()
+
+	perm := darwin.CheckPermissions()
+	fmt.Printf("gotab: timing %d summons (Accessibility %s, Screen Recording %s) — no ⌥⇥, driven headless\n",
+		n, grantWord(perm.Accessibility), grantWord(perm.ScreenRecording))
+	darwin.RunLoop()
+	return 0
+}
+
+// timingDriver arms the panel, posts a Summon, waits for the render-server hand-off, dismisses, and
+// repeats. t0 is taken at the Post — "gesture recognised" — so the delta covers the whole summon
+// path: the loop hop, selection reconcile, core.Layout, the marshal to the main thread, and the draw
+// and CA commit. Sample 0 is the cold summon; the rest are warm.
+func timingDriver(ctx context.Context, l *app.Loop, n int, stop context.CancelFunc) {
+	defer stop() // cancel ctx → the loop returns → the shutdown goroutine tears down the run loop
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-time.After(2 * time.Second): // let the first enumeration land (its cost is not a summon's)
+	}
+
+	committed := make(chan struct{}, 1)
+	darwin.TimingOnCommit(func() {
+		select {
+		case committed <- struct{}{}:
+		default:
+		}
+	})
+	defer darwin.TimingOnCommit(nil)
+
+	deltas := make([]time.Duration, 0, n)
+	for i := 0; i < n && ctx.Err() == nil; i++ {
+		select { // drop any stale signal from a previous iteration
+		case <-committed:
+		default:
+		}
+		darwin.TimingArm()
+		t0 := time.Now()
+		l.Post(app.Event{Kind: app.Summon})
+		select {
+		case <-committed:
+			deltas = append(deltas, time.Since(t0))
+		case <-time.After(2 * time.Second):
+			fmt.Fprintf(os.Stderr, "gotab: timing: summon %d never committed\n", i+1)
+		}
+		l.Post(app.Event{Kind: app.Dismiss})
+		time.Sleep(150 * time.Millisecond) // give the dismiss its own turn; start the next from rest
+	}
+	reportTiming(deltas, n)
+}
+
+// reportTiming prints the cold summon on its own and the warm distribution against the < 100 ms
+// budget (V6.3). Times are Go monotonic; the "commit" edge is the CATransaction completion block,
+// which is the frame handed to the render server — the same edge spike/panel used (D13).
+func reportTiming(deltas []time.Duration, want int) {
+	ms := func(d time.Duration) float64 { return float64(d) / float64(time.Millisecond) }
+	fmt.Printf("\nV6.3 — summon → first frame (CA commit): %d/%d samples\n", len(deltas), want)
+	if len(deltas) == 0 {
+		fmt.Println("  no samples — every summon timed out (Accessibility granted? window server up?)")
+		return
+	}
+	fmt.Printf("  cold (summon 1):  %6.2f ms\n", ms(deltas[0]))
+	warm := append([]time.Duration(nil), deltas[1:]...)
+	if len(warm) == 0 {
+		return
+	}
+	sort.Slice(warm, func(i, j int) bool { return warm[i] < warm[j] })
+	pct := func(p float64) time.Duration {
+		i := int(math.Ceil(p/100*float64(len(warm)))) - 1
+		if i < 0 {
+			i = 0
+		}
+		return warm[i]
+	}
+	p95 := pct(95)
+	fmt.Printf("  warm (%d):  min %.2f  median %.2f  p95 %.2f  max %.2f ms\n",
+		len(warm), ms(warm[0]), ms(pct(50)), ms(p95), ms(warm[len(warm)-1]))
+	verdict := "PASS"
+	if ms(p95) >= 100 {
+		verdict = "FAIL — send back to the phase that owns the cost (V6.3)"
+	}
+	fmt.Printf("  budget: warm p95 < 100 ms  →  %s\n", verdict)
+}
+
+func grantWord(ok bool) string {
+	if ok {
+		return "granted"
+	}
+	return "missing"
 }
 
 // runSettings is `gotab -settings`: a native window over the same CFPreferences domain the CLI and

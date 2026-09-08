@@ -75,7 +75,7 @@ task that comes back negative changes the approach; it does not stop the work.
 **Phase 0 targets — three of four have a number behind them:**
 | metric | budget | status |
 |---|---|---|
-| summon → pixels on screen | < 100 ms | **budget allocated, not yet measured end to end.** Drawing 1.3 ms (D13), capture ~46 ms and unparallelisable (D12), enumeration 0.30 ms warm (D5) → the budget goes on data → **V6.3** |
+| summon → pixels on screen | < 100 ms | **met (D50, V6.3): warm p95 15.25 ms** (median 8.43), cold 74.24 ms, 30/30 committed — ~15 % of budget. ⌥⇥→pixels ≈ 3.2 + 15.25 ≈ ~18.5 ms with V6.1. SR-off control run still owed. |
 | hotkey callback latency | < 5 ms | **met (D45, V6.1): 3.2 ms worst case over 20 real ⌥⇥ presses, mean 0.6 ms; first crossing 28 µs, not an outlier** |
 | capture → release, 100 cycles | no net growth | **met**: +0.0 MB on `IOSurface`, with a held-20 control proving the instrument is not blind (D14) |
 | thumbnail cache | bounded, bound is a number | **policy met** (P1.7, bounded LRU); the bound's real-world size is **V6.4** |
@@ -318,7 +318,7 @@ first task of the on-machine session. What is left: V6.2–V6.5, V6.7, V6.9, V6.
 |---|---|---|---|---|
 | **V6.1** | ✅ **done** | Hotkey delivery latency, real keypress | **3.2 ms worst case over 20 real ⌥⇥ presses** (mean 0.6, p50 0.28), 64 % of the 5 ms budget; first C→Go crossing 28 µs and not an outlier; no `kCGEventTapDisabledByTimeout`. D45; P0.2 → `[x]`. Contract: `docs/tasks/V6.1.md` | — (done) |
 | **V6.2** | ☐ ready | Panel over a full-screen app and across Spaces | panel appears **over** a full-screen app and follows the user across Spaces, verified by screenshot rather than by the absence of an error; plus P2.4's SpaceID converse. Contract: `docs/tasks/V6.2.md` | a human, ≥ 2 Spaces |
-| **V6.3** | ☐ ready | Summon → pixels, end to end | **< 100 ms** on the real app, timed to the CA commit and not to the call returning (D13: timing the call is wrong by 10x). Contract: `docs/tasks/V6.3.md` | a Mac with a window server |
+| **V6.3** | ⚠️ **partial (D50)** | Summon → pixels, end to end | Measured on this Mac via the `gotab -timing` scaffold: **warm p95 15.25 ms** (median 8.43, cold 74.24), 30/30 committed — **PASS, ~15 % of the 100 ms budget**. Owed: the control run with **Screen Recording off**, and ideally a 30–50-window count (this run had 2–3). Neither expected to move the verdict. Contract: `docs/tasks/V6.3.md` | a Mac with a window server |
 | **V6.4** | ☐ ready | Thumbnail memory at realistic scale | 50-window cache at Retina resolution stays inside the stated bound; measured on `spike/procmem`'s **`IOSurface`** row, sampled at summon (D8: the resident figure decays within seconds). Contract: `docs/tasks/V6.4.md` | a Mac, Screen Recording granted |
 | **V6.5** | ⚠️ **partial → Phase 7** | `internal/platform` behaviour | Driven on a real machine (2026-09-08, D46). **Enumeration ✓** — join, `cg`-recovery and exclusion-with-reason all correct. **Raise ✓ for AX-visible windows** (`both` / `ax` origin), **✗ for `cg`-only windows**: every `cg`-only raise returns `ErrNoWindow` because `gt_window_raise` resolves through `kAXWindowsAttribute`, which does not list them. The switcher shows tiles it cannot action — sent to **Phase 7**. Minimized / hidden-app / the failure sentinels: still to run. Contract: `docs/tasks/V6.5.md` | a Mac, both grants |
 | **V6.6** | ✅ **done** | Deferred table tests for the pure surfaces Phases 2–5 grew | `internal/prefs`, `internal/i18n`, `internal/update` (`version`/`manifest`/`check` over `httptest`), the event loop's `handle`, and `HotkeyDisplay` — `internal/core`-style table tests; `scripts/check.sh` green. Contract: `docs/tasks/V6.6.md` | — |
@@ -946,4 +946,22 @@ Append one line per session. Newest last. This is how a cold session learns what
   `https://elgx.me/gotab/` and, via `release.yml` copying it into the Pages artifact, at the GitHub
   Pages URL alongside `latest.json`. `README.md`'s stale "Phase 0" status line is fixed.
   **Next: unchanged — the on-machine V6 checklist.**
+- `2026-09-08` — **V6.3 measured on this Mac; a `-timing` scaffold added.** New `gotab -timing`
+  (`cmd/gotab` `runTiming`/`timingDriver`/`reportTiming` + `internal/platform/darwin/timing.{h,go}`
+  + a one-shot armed `CATransaction` completion block in `panel.m` `gt_panel_show`) drives the whole
+  render pipeline headless — no hotkey, no permission gate — and times post→render-server per summon.
+  **Result (D50):** warm p95 **15.25 ms** (median 8.43, min 1.83, max 19.89), cold 74.24 ms, 30/30
+  committed — **PASS at ~15 % of the 100 ms budget**; with V6.1's 3.2 ms delivery, ⌥⇥→pixels ≈
+  ~18.5 ms p95. Phase 0's "summon → pixels" target now has a number. V6.3 is **partial** — the
+  Screen-Recording-off control run and a 30–50-window count are still owed (neither expected to move
+  the verdict). Also: `gotab -list` gained a `SPACE` column + "current Space N" header, so V6.2's
+  SpaceID converse is checkable — 2 Spaces exist on this host but every window is on Space 1, so
+  that half still needs a window placed on Space 2 by a human. V6.7's self-verifiable half
+  re-confirmed on the current build (`minos` 12.0 = plist `LSMinimumSystemVersion`, ad-hoc
+  `codesign --verify --strict` valid, `spctl` rejects as D38 expects, `plutil -lint` clean).
+  Gate green; scaffold inert in `gotab -switch`.
+  **Next — needs a human at the machine / other hardware:** V6.3 SR-off re-run; V6.2 (fullscreen +
+  Space screenshots + a window on Space 2); V6.4 (~50 windows + `spike/procmem`); V6.7 (a real
+  macOS 12 host + a clean account); V6.9 (revoke→modal→grant loop); V6.10 (VoiceOver on, listened);
+  V6.13 / V6.14 (Phase 7, `gotab -switch` + `spike/raisetest`).
 
