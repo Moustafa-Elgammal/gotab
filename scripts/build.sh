@@ -71,6 +71,9 @@ cat > "$OUT/Contents/Info.plist" <<PLIST
     <key>CFBundleVersion</key>           <string>${VERSION}</string>
     <key>CFBundleShortVersionString</key><string>${SHORT_VERSION}</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
+    <!-- Icon: Contents/Resources/AppIcon.icns, built below from resources/assets/icon-1024.png.
+         The value is extensionless by convention; macOS resolves it to the .icns. -->
+    <key>CFBundleIconFile</key>          <string>AppIcon</string>
     <key>LSMinimumSystemVersion</key>    <string>${MIN_MACOS}</string>
     <!-- Localization (P5.1): the base language, and the set that ships. AppKit reads
          Contents/Resources/<lang>.lproj/Localizable.strings; the Go side reads the
@@ -100,6 +103,29 @@ echo "    bundling resources"
 for extra in resources/*.lproj resources/appcast; do
   if [ -e "$extra" ]; then cp -R "$extra" "$OUT/Contents/Resources/"; fi
 done
+
+# App icon. resources/assets/icon-1024.png is the square master (padded from the original
+# artwork resources/assets/ico.png -- see resources/assets/README.md). iconutil packs an
+# .iconset directory of exact-size PNGs into one .icns, so sips renders the ten sizes Apple
+# asks for first. Absent master -> skip with a warning, same stance as the locale trees
+# above: the app still runs, it just falls back to the generic bundle icon. sips and iconutil
+# are base-system tools, present wherever the rest of this script runs.
+ICON_SRC="resources/assets/icon-1024.png"
+if [ -f "$ICON_SRC" ]; then
+  echo "    generating AppIcon.icns"
+  ICONSET="build/AppIcon.iconset"
+  rm -rf "$ICONSET"; mkdir -p "$ICONSET"
+  for spec in 16:icon_16x16    32:icon_16x16@2x  32:icon_32x32    64:icon_32x32@2x \
+              128:icon_128x128 256:icon_128x128@2x 256:icon_256x256 512:icon_256x256@2x \
+              512:icon_512x512 1024:icon_512x512@2x; do
+    px="${spec%%:*}"; name="${spec##*:}"
+    sips -z "$px" "$px" "$ICON_SRC" --out "$ICONSET/${name}.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$OUT/Contents/Resources/AppIcon.icns"
+  rm -rf "$ICONSET"
+else
+  echo "    WARNING: ${ICON_SRC} absent -- bundle will use the generic icon" >&2
+fi
 
 # The plist claims MIN_MACOS; this proves the binary agrees, per slice. A mismatch is silent at build
 # time and fatal at launch on the user's machine, which is the worst place to find it -- and it is a
