@@ -1671,3 +1671,38 @@ human confirms it under V6.2.** A macOS release that drops the symbols degrades 
 still does something useful, so it stays on screen; P7.2 removes only what is actually gone. No
 `prefs` field to hide app-only-reachable windows — add one only if that turns out to be wanted.
 Recorded in `docs/ARCHITECTURE.md` under "The actionability rule".
+
+---
+
+## D48 · AltTab is credited as inspiration; the from-scratch claim is unchanged — 2026-09-08
+
+**Decision (owner's call).** The project now names **AltTab** (`lwouis/alt-tab-macos`) as the prior
+art that inspired it — the idea that macOS deserves a fast, preview-driven window switcher, and the
+proof it can be done well. Earlier docs referenced "a mature open-source Swift switcher" without a
+name (D7 deliberately kept prior art unnamed and self-contained; D10 measured "a reference switcher
+v11.6.0" anonymously). That anonymity is dropped.
+
+**What does not change.** GoTab still inherits nothing: no code, no assets, no bundle ID, no
+preference or license continuity. Being *inspired by* an app and an idea is not the same as being
+derived from it, and the wording everywhere is "inspired by", never "based on" or "port of". D7's
+substance stands — `PLATFORM-LESSONS.md` remains a set of platform facts stated on their own terms
+and measured independently against GoTab's spikes; it now says which switcher proved the problem
+tractable rather than pretending none exists.
+
+**Where it is recorded:** `README.md` (an Acknowledgements section), `docs/PLATFORM-LESSONS.md`
+(the intro and §1), and the project website (`docs/site/`, served at `https://elgx.me/gotab/` and,
+via the release workflow, at the GitHub Pages URL alongside `latest.json`). Both projects are
+GPL-3.0-or-later, which is a shared licence choice, not a derivation.
+
+## D49 · A project website lives in `docs/site/` and is served from two hosts — 2026-09-08
+
+`docs/site/index.html` is a single self-contained page — inline CSS, no external requests, the app
+icon copied in as `gotab-icon.png`, theme-aware, responsive. It is the short overview a user wants
+before cloning: what GoTab is, the firm decisions behind it, how to install, the honest "early
+release" status, and the AltTab acknowledgement (D48).
+
+It is served at **`https://elgx.me/gotab/`** (deployed by the owner, outside CI) and the release
+workflow also copies it into the Pages artifact, so **`https://moustafa-elgammal.github.io/gotab/`**
+renders the same page while still serving `latest.json` next to it for `gotab -check-update`. One
+source, two hosts; the version string in the page is updated by hand at release time (the download
+button points at `releases/latest`, which never goes stale).
