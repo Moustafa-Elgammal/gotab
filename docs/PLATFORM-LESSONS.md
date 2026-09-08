@@ -4,8 +4,13 @@ GoTab is written from scratch, but the *problem* is not new. A complete macOS wi
 of reverse-engineering against undocumented platform behaviour. This file distils the design
 conclusions that cost the most to discover, so GoTab does not pay for them twice.
 
+The clearest existing proof that this is a solved problem is **[AltTab](https://github.com/lwouis/alt-tab-macos)**,
+a mature open-source Swift switcher — it is the reference this project measures against. Nothing here
+is copied from it: every claim below is a platform fact, stated on its own terms and, where a number
+is quoted, measured independently against GoTab's own spikes.
+
 Every claim here is a platform fact — a constraint of macOS, CoreGraphics, AppKit, the WindowServer or
-TCC — not a preference. Where a number is quoted it was measured.
+TCC — not a preference.
 
 **How to use this:** read the relevant section before designing a subsystem, not after. Most entries
 describe a constraint that looks removable until it isn't.
@@ -14,8 +19,8 @@ describe a constraint that looks removable until it isn't.
 
 ## 1 · Scale reference
 
-What a complete implementation actually costs. A mature open-source Swift switcher for this problem
-measures, in round terms:
+What a complete implementation actually costs. AltTab (the Swift switcher named above), measured in
+round terms:
 
 | | |
 |---|---|

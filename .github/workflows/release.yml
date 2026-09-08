@@ -79,7 +79,7 @@ jobs:
             "GoTab-$TAG.zip" "GoTab-$TAG.zip.sha256" \
             --title "$TAG" --notes "$NOTES" --verify-tag
 
-      - name: Render the update manifest
+      - name: Render the update manifest and the site
         env:
           SHORT: ${{ steps.v.outputs.short }}
           TAG: ${{ steps.v.outputs.tag }}
@@ -93,16 +93,13 @@ jobs:
              --arg n "$NOTES" \
              '.version = $v | .url = $u | .notes = $n' \
              resources/appcast/latest.json > _site/latest.json
-          cat > _site/index.html <<'HTML'
-          <!doctype html>
-          <meta charset="utf-8">
-          <title>GoTab</title>
-          <p>GoTab's release feed. See
-          <a href="https://github.com/Moustafa-Elgammal/gotab">the repository</a>
-          and <a href="latest.json">latest.json</a>.
-          HTML
+          # The overview page (docs/site/) is served here too, next to latest.json, so the
+          # Pages URL renders the same page as https://elgx.me/gotab/ (D48 / D49).
+          cp docs/site/index.html docs/site/gotab-icon.png _site/
           echo "--- _site/latest.json ---"
           cat _site/latest.json
+          echo "--- _site contents ---"
+          ls -la _site
 
       - uses: actions/upload-pages-artifact@v3
         with:

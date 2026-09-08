@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GoTab — a fast macOS window switcher, written in Go</title>
+<meta name="description" content="GoTab is a keyboard-first window switcher for macOS, built from scratch in Go with a thin AppKit shell. Live thumbnails, MRU ordering, a rebindable hotkey, and Spaces-aware raise.">
+<meta property="og:title" content="GoTab — a fast macOS window switcher, written in Go">
+<meta property="og:description" content="Keyboard-first window switching for macOS. Live thumbnails, MRU ordering, a rebindable hotkey, Spaces-aware raise. Built from scratch in Go.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://elgx.me/gotab/">
+<link rel="icon" type="image/png" href="gotab-icon.png">
+<style>
+  :root {
+    color-scheme: dark light;
+    --bg: #0b0e14;
+    --bg-soft: #11161f;
+    --panel: #151b26;
+    --panel-2: #1b2130;
+    --border: #262e3d;
+    --text: #e8edf5;
+    --text-dim: #9aa7bd;
+    --text-faint: #6b7890;
+    --go: #00add8;
+    --go-bright: #4fd6f0;
+    --accent: #ffb454;
+    --radius: 14px;
+    --maxw: 1080px;
+    --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #f6f8fb;
+      --bg-soft: #eef2f7;
+      --panel: #ffffff;
+      --panel-2: #f2f5f9;
+      --border: #dde3ec;
+      --text: #10151f;
+      --text-dim: #47546b;
+      --text-faint: #78859c;
+      --go: #007d9c;
+      --go-bright: #009cbf;
+      --accent: #b06f00;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    * { animation: none !important; transition: none !important; }
+  }
+
+  body {
+    margin: 0;
+    font-family: var(--font);
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+    overflow-x: hidden;
+  }
+
+  a { color: var(--go-bright); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  .wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 24px; }
+
+  /* ---- top bar ---- */
+  header {
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: saturate(140%) blur(10px);
+    border-bottom: 1px solid var(--border);
+  }
+  .bar { display: flex; align-items: center; justify-content: space-between; height: 60px; }
+  .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; letter-spacing: -0.01em; color: var(--text); }
+  .brand img { width: 26px; height: 26px; border-radius: 6px; }
+  nav a { color: var(--text-dim); font-size: 0.92rem; margin-left: 22px; }
+  nav a:hover { color: var(--text); text-decoration: none; }
+  @media (max-width: 620px) { nav a:not(.gh) { display: none; } }
+
+  /* ---- hero ---- */
+  .hero { position: relative; padding: 84px 0 72px; text-align: center; overflow: hidden; }
+  .hero::before {
+    content: ""; position: absolute; inset: -40% -20% auto; height: 640px;
+    background: radial-gradient(50% 60% at 50% 0%, color-mix(in srgb, var(--go) 22%, transparent), transparent 70%);
+    pointer-events: none;
+  }
+  .hero-icon {
+    width: 116px; height: 116px; border-radius: 26px;
+    filter: drop-shadow(0 18px 40px color-mix(in srgb, var(--go) 30%, transparent));
+    animation: float 6s ease-in-out infinite;
+  }
+  @keyframes float { 0%,100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+
+  .hero h1 {
+    font-size: clamp(2.4rem, 6vw, 3.7rem);
+    line-height: 1.05; letter-spacing: -0.03em; margin: 22px 0 10px; font-weight: 800;
+  }
+  .hero .tag { font-size: clamp(1.05rem, 2.5vw, 1.3rem); color: var(--text-dim); max-width: 44ch; margin: 0 auto; }
+  .pill-row { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; margin: 22px 0 6px; }
+  .pill {
+    font: 500 0.8rem/1 var(--mono); color: var(--text-dim);
+    border: 1px solid var(--border); background: var(--panel);
+    padding: 7px 11px; border-radius: 999px;
+  }
+  .pill b { color: var(--go-bright); font-weight: 600; }
+
+  .cta { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; margin-top: 26px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 9px;
+    padding: 12px 20px; border-radius: 11px; font-weight: 600; font-size: 0.98rem;
+    border: 1px solid transparent; transition: transform .12s ease, background .12s ease, border-color .12s ease;
+  }
+  .btn:hover { text-decoration: none; transform: translateY(-1px); }
+  .btn-primary { background: var(--go); color: #04121a; }
+  .btn-primary:hover { background: var(--go-bright); }
+  .btn-ghost { border-color: var(--border); color: var(--text); background: var(--panel); }
+  .btn-ghost:hover { border-color: var(--go); }
+
+  .status-note {
+    margin: 30px auto 0; max-width: 52ch; font-size: 0.9rem; color: var(--text-faint);
+    border: 1px dashed var(--border); border-radius: 12px; padding: 12px 16px;
+  }
+  .status-note b { color: var(--text-dim); font-weight: 600; }
+
+  /* ---- sections ---- */
+  section { padding: 64px 0; border-top: 1px solid var(--border); }
+  section h2 {
+    font-size: clamp(1.5rem, 3.5vw, 2rem); letter-spacing: -0.02em; margin: 0 0 8px; font-weight: 750;
+  }
+  section .lead { color: var(--text-dim); max-width: 60ch; margin: 0 0 34px; }
+
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 18px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 22px; transition: border-color .15s ease, transform .15s ease;
+  }
+  .card:hover { border-color: color-mix(in srgb, var(--go) 55%, var(--border)); transform: translateY(-2px); }
+  .card h3 { margin: 0 0 6px; font-size: 1.05rem; letter-spacing: -0.01em; }
+  .card p { margin: 0; color: var(--text-dim); font-size: 0.95rem; }
+  .card .ic { font-size: 1.3rem; line-height: 1; display: block; margin-bottom: 12px; }
+  .kbd {
+    font: 600 0.82em/1 var(--mono); background: var(--panel-2); border: 1px solid var(--border);
+    border-bottom-width: 2px; border-radius: 6px; padding: 2px 6px; color: var(--text);
+  }
+
+  pre {
+    background: var(--bg-soft); border: 1px solid var(--border); border-radius: 12px;
+    padding: 18px 20px; overflow-x: auto; font: 0.88rem/1.7 var(--mono); color: var(--text);
+    margin: 0 0 16px;
+  }
+  pre .c { color: var(--text-faint); }
+  .note { font-size: 0.92rem; color: var(--text-dim); }
+  .note code, li code { font: 0.86em var(--mono); background: var(--panel-2); padding: 1px 5px; border-radius: 5px; }
+
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 40px; align-items: start; }
+  @media (max-width: 780px) { .two-col { grid-template-columns: 1fr; gap: 24px; } }
+  .two-col ul { margin: 0; padding-left: 20px; color: var(--text-dim); }
+  .two-col li { margin: 7px 0; }
+
+  .ack {
+    background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+    padding: 24px 26px;
+  }
+  .ack p { margin: 0 0 12px; color: var(--text-dim); }
+  .ack p:last-child { margin-bottom: 0; }
+  .ack strong { color: var(--text); }
+
+  footer {
+    border-top: 1px solid var(--border); padding: 40px 0 56px; color: var(--text-faint);
+    font-size: 0.88rem; text-align: center;
+  }
+  footer a { color: var(--text-dim); }
+  footer .row { margin-bottom: 8px; }
+  footer .sep { margin: 0 8px; opacity: 0.5; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap bar">
+    <span class="brand"><img src="gotab-icon.png" alt="">GoTab</span>
+    <nav>
+      <a href="#features">Features</a>
+      <a href="#install">Install</a>
+      <a class="gh" href="https://github.com/Moustafa-Elgammal/gotab">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <img class="hero-icon" src="gotab-icon.png" alt="GoTab icon">
+    <h1>Switch windows at the speed of thought.</h1>
+    <p class="tag">GoTab is a keyboard-first window switcher for macOS — built from scratch in Go, with a thin AppKit shell.</p>
+    <div class="pill-row">
+      <span class="pill">macOS <b>12+</b></span>
+      <span class="pill">latest <b>v0.3.0</b></span>
+      <span class="pill"><b>GPL-3.0</b></span>
+      <span class="pill">universal <b>arm64 · x86_64</b></span>
+    </div>
+    <div class="cta">
+      <a class="btn btn-primary" href="https://github.com/Moustafa-Elgammal/gotab/releases/latest">Download for macOS</a>
+      <a class="btn btn-ghost" href="https://github.com/Moustafa-Elgammal/gotab">View the source</a>
+    </div>
+    <p class="status-note">
+      <b>Early release.</b> The switcher works end to end in code and ships as a signed universal
+      <code>.app</code>; on-device verification (latency, multi-Space, VoiceOver, a clean-account
+      launch) is still in progress. Expect rough edges, and file what you find.
+    </p>
+  </div>
+</div>
+
+<section id="overview">
+  <div class="wrap">
+    <h2>What it is</h2>
+    <p class="lead">
+      Hold <span class="kbd">⌥</span>, tap <span class="kbd">⇥</span>, and cycle through your windows in
+      most-recently-used order — with a live thumbnail for each one. Release to switch. It is the
+      switcher macOS never shipped, written as a native Go program rather than a scripting hack.
+    </p>
+    <div class="two-col">
+      <ul>
+        <li>One flat panel, drawn in a single pass — no per-tile view hierarchy.</li>
+        <li>Most-recently-used ordering that only an actual focus change is allowed to reorder.</li>
+        <li>Thumbnails captured ahead of time and held in a bounded cache, so summon never blocks on pixels.</li>
+        <li>A rebindable hotkey — <span class="kbd">⌥⇥</span> is just the default.</li>
+      </ul>
+      <ul>
+        <li>Enumeration joins CoreGraphics and Accessibility so windows on other Spaces are still listed.</li>
+        <li>Selecting one of those raises it by switching to its Space, or brings its app forward.</li>
+        <li>Windows that are genuinely gone leave the list within one rescan.</li>
+        <li>A filter for minimized / hidden / other-Space windows and a per-app blocklist.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="features">
+  <div class="wrap">
+    <h2>Built around a few firm decisions</h2>
+    <p class="lead">Every one of these was measured, not guessed — the numbers live in the project's <a href="https://github.com/Moustafa-Elgammal/gotab/blob/main/docs/DECISIONS.md">DECISIONS log</a>.</p>
+    <div class="grid">
+      <div class="card">
+        <span class="ic">⌨️</span>
+        <h3>Keyboard-first</h3>
+        <p>Summon, cycle, and commit without the mouse. The hotkey callback lands in about 3&nbsp;ms of a real keypress.</p>
+      </div>
+      <div class="card">
+        <span class="ic">🖼️</span>
+        <h3>Live thumbnails</h3>
+        <p>ScreenCaptureKit previews, captured in the background and evicted by a fixed-capacity LRU. No leaked bitmaps.</p>
+      </div>
+      <div class="card">
+        <span class="ic">🪟</span>
+        <h3>Spaces-aware</h3>
+        <p>A window on another Space is still in the list — and picking it switches to that Space and raises the real window.</p>
+      </div>
+      <div class="card">
+        <span class="ic">🧠</span>
+        <h3>MRU that behaves</h3>
+        <p>Only an attention decision or a structural repair may reorder the list. A title change never moves a window.</p>
+      </div>
+      <div class="card">
+        <span class="ic">🐹</span>
+        <h3>Written in Go</h3>
+        <p>All the logic is pure Go with a zero-allocation hot path; cgo and AppKit are a thin, humble shell at the edge.</p>
+      </div>
+      <div class="card">
+        <span class="ic">🪶</span>
+        <h3>Light on memory</h3>
+        <p>The thumbnail cache is bounded and that bound is a number. macOS reclaims the rest; nothing grows without limit.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="install">
+  <div class="wrap">
+    <h2>Getting started</h2>
+    <p class="lead">Requires macOS&nbsp;12 or newer, plus Go and the Xcode command line tools to build from source.</p>
+    <div class="two-col">
+      <div>
+        <pre><span class="c"># build, package, install to /Applications, print the next steps</span>
+git clone https://github.com/Moustafa-Elgammal/gotab
+cd gotab
+./scripts/install.sh</pre>
+        <p class="note">
+          Or grab <a href="https://github.com/Moustafa-Elgammal/gotab/releases/latest"><code>GoTab-v0.3.0.zip</code></a>
+          from the releases page. The bundle is ad-hoc signed, so the first launch of a downloaded
+          copy needs a right-click&nbsp;→&nbsp;<em>Open</em> (notarization is future work).
+        </p>
+      </div>
+      <div>
+        <p class="note"><strong style="color:var(--text)">Two permissions, once:</strong></p>
+        <ul style="margin:0;padding-left:20px;color:var(--text-dim)">
+          <li><strong>Accessibility</strong> — to enumerate windows and raise the one you pick.</li>
+          <li><strong>Screen&nbsp;Recording</strong> — for window titles and the live thumbnails.</li>
+        </ul>
+        <p class="note" style="margin-top:14px">
+          GoTab asks for each when it first needs it and picks the grant up without a relaunch.
+          Updates are check-only: <code>gotab -check-update</code> tells you a newer build exists;
+          you download it yourself.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="scratch">
+  <div class="wrap">
+    <h2>Built from scratch</h2>
+    <p class="lead">
+      GoTab has its own bundle ID and inherits nothing from any existing install — no preference
+      migration, no license continuity, no borrowed code. A complete macOS window switcher is years
+      of reverse-engineering undocumented platform behaviour, so the conclusions that cost the most
+      to discover are written down in
+      <a href="https://github.com/Moustafa-Elgammal/gotab/blob/main/docs/PLATFORM-LESSONS.md">PLATFORM-LESSONS.md</a>
+      — every entry a platform fact, on its own terms.
+    </p>
+  </div>
+</section>
+
+<section id="thanks">
+  <div class="wrap">
+    <h2>Acknowledgements</h2>
+    <div class="ack">
+      <p>
+        GoTab is inspired by <strong><a href="https://github.com/lwouis/alt-tab-macos">AltTab</a></strong>
+        (<code>lwouis/alt-tab-macos</code>) — the idea that macOS deserves a fast, preview-driven
+        window switcher, and the proof that it can be done well. AltTab is the reference point this
+        project measures itself against and the reason the idea was worth pursuing.
+      </p>
+      <p>
+        GoTab shares none of AltTab's code. It is an independent implementation in Go, and any
+        resemblance is in the goal, not the source. Both projects are released under the
+        <strong>GNU General Public License v3</strong>.
+      </p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="row">
+      <a href="https://github.com/Moustafa-Elgammal/gotab">Source</a><span class="sep">·</span>
+      <a href="https://github.com/Moustafa-Elgammal/gotab/releases">Releases</a><span class="sep">·</span>
+      <a href="https://github.com/Moustafa-Elgammal/gotab/blob/main/docs/ROADMAP.md">Roadmap</a><span class="sep">·</span>
+      <a href="https://github.com/Moustafa-Elgammal/gotab/issues">Issues</a>
+    </div>
+    <div class="row">© 2026 Moustafa Elgammal · GPL-3.0-or-later</div>
+    <div class="row">Not affiliated with Apple. macOS is a trademark of Apple Inc. The Go gopher is a Renée French creation.</div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -936,4 +936,14 @@ Append one line per session. Newest last. This is how a cold session learns what
   `ARCHITECTURE.md` under "The actionability rule".
   **Next: the on-machine V6 checklist — V6.2 (also covers P7.3), V6.3–V6.5, V6.7, V6.9, V6.10, and
   V6.13 / V6.14 for Phase 7.**
+- `2026-09-08` — **`v0.3.0` released, and the project gained a website + an AltTab acknowledgement.**
+  Pushing `v0.3.0` cut the release end to end (gate → universal `.app` → GitHub Release with the zip
+  + `.sha256` → `latest.json` on Pages advertising `0.3.0`); both CI jobs, `release` and
+  `deploy-pages`, are green now. **D48:** AltTab (`lwouis/alt-tab-macos`) is named as the inspiration
+  in `README.md`, `PLATFORM-LESSONS.md` and the site — "inspired by", never "based on"; nothing is
+  inherited, and D7's substance is intact. **D49:** `docs/site/index.html` is a self-contained
+  overview page (inline CSS, no external requests, the app icon copied in), served at
+  `https://elgx.me/gotab/` and, via `release.yml` copying it into the Pages artifact, at the GitHub
+  Pages URL alongside `latest.json`. `README.md`'s stale "Phase 0" status line is fixed.
+  **Next: unchanged — the on-machine V6 checklist.**
 

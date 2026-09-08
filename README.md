@@ -1,10 +1,13 @@
 # GoTab
 
 A macOS window switcher written in Go. Built from scratch — its own bundle ID, nothing inherited
-from any existing install.
+from any existing install. Inspired by [AltTab](https://github.com/lwouis/alt-tab-macos); it shares
+none of its code.
 
-**Status: Phase 0 (proof).** Not usable yet. The design is being validated before the app is built; see
-[docs/ROADMAP.md](docs/ROADMAP.md) for exactly where it stands.
+**Status: early release (`v0.3.0`).** Phases 0–7 are code-complete — the switcher works end to end
+and ships as a signed universal `.app` — and on-device verification (latency, multi-Space, VoiceOver,
+a clean-account launch) is still in progress. See [docs/ROADMAP.md](docs/ROADMAP.md) for exactly where
+it stands. Overview page: <https://elgx.me/gotab/>.
 
 ## Install
 
@@ -43,6 +46,17 @@ The same workflow publishes `latest.json` to GitHub Pages
 to tell you a newer build is out. The bundle is ad-hoc signed, so a copy downloaded to another Mac
 needs a right-click → Open the first time (notarization is future work). See
 [docs/DECISIONS.md](docs/DECISIONS.md) D42.
+
+## Acknowledgements
+
+GoTab is inspired by **[AltTab](https://github.com/lwouis/alt-tab-macos)** (`lwouis/alt-tab-macos`) —
+the idea that macOS deserves a fast, preview-driven window switcher, and the proof that it can be done
+well. It is the reference point this project measures itself against.
+
+GoTab shares none of AltTab's code. It is an independent implementation in Go; the resemblance is in
+the goal, not the source. Both projects are released under the GNU GPL v3. The hard-won macOS platform
+knowledge behind a switcher like this is written up on its own terms in
+[docs/PLATFORM-LESSONS.md](docs/PLATFORM-LESSONS.md).
 
 ## License
 
