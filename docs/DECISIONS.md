@@ -1813,3 +1813,33 @@ in its 5-minute poll loop waiting for a grant the user was never clearly asked f
    through the menu.
 
 Phase 8 — Reachability. Verification is V6.15 (a clean account).
+
+---
+
+## D53 · `capture.m` was compiling ~40 `-Wunguarded-availability-new` warnings; now it fails the build instead — 2026-09-08
+
+A user's `./scripts/install.sh` printed ~40 warnings per architecture: every `SCShareableContent` /
+`SCWindow` / `SCStreamConfiguration` / `SCContentFilter` / `SCScreenshotManager` use in `capture.m`
+flagged as "available on macOS 12.3 (or 14.0) or newer, but the deployment target is macOS 12.0".
+
+**They were real, in the sense that clang could not see the guard.** The design (D26) is: weak-link
+ScreenCaptureKit, and `sck_present()` checks `NSClassFromString(@"SCScreenshotManager") != nil` at
+runtime so a below-floor OS gets `GT_ERR_UNAVAILABLE` instead of a link failure. But
+`-Wunguarded-availability-new` is a *static* check — a runtime function call is not a guard it
+recognises. It wants a lexically-enclosing `if (@available(...))` or an `API_AVAILABLE` attribute.
+Without one, the fallback rested on "messaging a NULL Objective-C class is a safe no-op", which is
+true but undocumented-in-the-code and fragile.
+
+Also: `go build` never showed these. It uses the SDK's own deployment target (26.0 here, D17), where
+all the APIs exist. Only `build.sh`'s explicit `MACOSX_DEPLOYMENT_TARGET=12.0` triggers them — so the
+gate was green and the noise only appeared on a release/install build.
+
+**Fix.** `API_AVAILABLE(macos(12.3))` on `g_content` and the three SCK helpers; the SCK body of
+`gt_capture` wrapped `if (@available(macOS 14.0, *)) @autoreleasepool { … }` with a trailing
+`return GT_ERR_UNAVAILABLE` for < 14 (which `sck_present()` already returned — the branch is a
+formality clang needs). Behaviour on macOS 14+ is byte-for-byte the same.
+
+**And it now fails the build, not warns.** `shim.go` adds `-Werror=unguarded-availability-new`: this
+package's whole below-floor story depends on every such call being guarded, so an unguarded one is a
+bug. Caveat: it only bites under `build.sh` (minos 12.0); a plain `go build` at the SDK target still
+cannot see the condition.

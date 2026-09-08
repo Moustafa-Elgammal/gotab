@@ -1,7 +1,12 @@
 package darwin
 
 /*
-#cgo CFLAGS: -x objective-c -Wall -Wextra -Wno-unused-parameter
+#cgo CFLAGS: -x objective-c -Wall -Wextra -Wno-unused-parameter -Werror=unguarded-availability-new
+// -Werror=unguarded-availability-new: this package targets minos 12.0 (D17) and reaches 12.3+ /
+// 14.0 APIs behind weak links (capture.go) that resolve to NULL on an older OS. Every such call MUST
+// sit in an if (@available) block or NSClassFromString-guard, or the NULL is messaged and the
+// behaviour is undefined. A missing guard is a bug, not a warning — it fails the build. Only bites
+// under build.sh's MACOSX_DEPLOYMENT_TARGET=12.0; a plain `go build` uses the SDK's own version.
 #cgo LDFLAGS: -framework Foundation -framework AppKit -framework ApplicationServices -framework CoreGraphics
 #include "shim.h"
 */

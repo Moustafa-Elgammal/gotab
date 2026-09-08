@@ -1033,4 +1033,12 @@ Append one line per session. Newest last. This is how a cold session learns what
   `NSAlert` for an Accessory app before the run loop may not surface (D46 "unfiled", observed today)
   — decide with V6.9. Verification: **V6.15** (a clean account). Gate green.
   **Next: unchanged — the human/hardware V6 checklist, now including V6.15.**
+- `2026-09-08` — **`capture.m` availability warnings fixed (D53).** A user's `install.sh` printed ~40
+  `-Wunguarded-availability-new` warnings — SCK APIs (12.3+/14.0) used under `minos 12.0` (D17) with
+  only a runtime `sck_present()` guard, which clang's static check cannot see. `go build` never
+  showed them (SDK-default target); only `build.sh`'s `MACOSX_DEPLOYMENT_TARGET=12.0` does. Fixed
+  with `API_AVAILABLE(macos(12.3))` on the SCK helpers and `if (@available(macOS 14.0, *))` around
+  `gt_capture`'s body; no behaviour change on 14+. `shim.go` now carries
+  `-Werror=unguarded-availability-new` so the next unguarded below-floor call fails the build. Both
+  `check.sh` and `build.sh` clean.
 
