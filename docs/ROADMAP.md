@@ -303,6 +303,15 @@ Everything Phases 0–5 deferred, run once against the assembled app. **This pha
 is not a formality**: it is where the `assumption` tags above are cashed in, and a task here coming back
 negative is expected to send work back into an earlier phase rather than be waved through.
 
+> **`v1.0.0` shipped 2026-09-08 (D56) without waiting for the rows still open below.** The owner's
+> call: the feature set is complete and the whole switcher is proven end to end on the maintainer's
+> Mac (V6.1 / V6.3 measured there), so the rest is **post-1.0 hardening on hardware and configs that
+> machine can't stand in for** — a second Space (V6.2), a genuinely clean account and a macOS 12
+> host (V6.7), the revoke→grant human loop (V6.9), the `cg`-only / dead-window action paths on real
+> targets (V6.13 / V6.14), the clean-account launch (V6.15) — plus **full VoiceOver** (V6.10), which
+> is a committed follow-up, **not** dropped. Each stays a release blocker for the *point release that
+> claims it*, not for 1.0. Nothing here is waved through; it is sequenced after 1.0.
+
 Serial, one owner. Of what remains, V6.2 / V6.9 / V6.10 need a human at the machine and V6.3 / V6.4 /
 V6.5 / V6.7 need a real Mac with a window server — TCC blocks synthesising the input and an agent host
 has no display, the same wall P0.7 and P0.1 hit, not a gap in the tooling.
@@ -1097,3 +1106,10 @@ Append one line per session. Newest last. This is how a cold session learns what
   `GoTab-v0.4.0.zip`, `README.md` status → `v0.4.0`. `.github/workflows/release.yml` builds the
   universal `.app`, cuts the GitHub Release with the zip + SHA-256, and renders `latest.json` + the
   site to Pages from the annotated tag's subject line.
+- `2026-09-08` — **Release `v1.0.0` — feature-complete (D56).** Owner's call: Phases 0–8 are done and
+  the switcher is proven end to end on the maintainer's Mac (V6.1 / V6.3 measured there), so 1.0
+  ships now. The open Phase 6 rows (V6.2, V6.4, V6.5/V6.13, V6.7, V6.9, V6.14, V6.15) become
+  post-1.0 hardening on hardware/configs that machine can't cover; **V6.10 full VoiceOver is a
+  committed follow-up, not dropped** — no accessibility code is removed. Site pill → `v1.0.0`,
+  download example → `GoTab-v1.0.0.zip`, `README.md` + `AGENTS.md` status → `v1.0.0`. No code change
+  in this commit beyond the version/status strings.

@@ -1,12 +1,13 @@
 # GoTab — working agreement
 
 A macOS window switcher in Go, built from scratch; nothing is inherited from any existing install.
-**Status: Phases 0–5 complete. Phase 7 (actionability) code-complete (P7.1–P7.4, D46 / D47) — the
-switcher now switches to a `cg`-only window's Space and resolves it (P7.3, private, unverified),
-falls back to activating its app (P7.1), and prunes genuinely-dead windows (P7.2). Phase 8
-(reachability) code-complete — menu-bar surface (P8.1, D54) and first-run onboarding: one combined
-permission ask, shown once, never blocking (P8.2, D55). Phase 6 (verification) in progress — V6.1 /
-V6.6 / V6.8 / V6.11 / V6.12 done. Left: V6.2–V6.5, V6.7, V6.9, V6.10, and V6.13–V6.15.**
+**Status: `v1.0.0` — feature-complete (D56). Phases 0–8 done.** Phase 7 (actionability) — `cg`-only
+Space-switch + resolve (P7.3, private), app-activate fallback (P7.1), dead-window pruning (P7.2).
+Phase 8 (reachability) — menu-bar surface (P8.1, D54) and first-run onboarding: one combined
+permission ask, shown once, never blocking (P8.2, D55). Phase 6 (verification) is **post-1.0
+hardening, not a blocker** — done: V6.1 / V6.6 / V6.8 / V6.11 / V6.12; open on hardware/configs the
+maintainer's Mac can't cover: V6.2, V6.4, V6.5/V6.13, V6.7, V6.9, V6.14, V6.15, and V6.10 (full
+VoiceOver — a committed follow-up, not dropped).**
 
 ## Read these first
 

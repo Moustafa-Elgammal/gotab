@@ -1933,3 +1933,38 @@ the run loop: if Accessibility was missing it showed an `NSAlert`, then sat on t
 alert appears on first launch and not on the second, "Open System Settings" opens the pane(s),
 granting brings ⌥⇥ up with no relaunch, and the switcher is responsive with its menu bar throughout.
 Gate green, `build.sh` clean at minos 12.0, no tests (D16 / D23).
+
+---
+
+## D56 · `v1.0.0` — the owner's call: feature-complete, ship it; the rest is post-1.0 hardening — 2026-09-08
+
+**Decision (owner's call).** GoTab is released as **`v1.0.0`**. Phases 0–8 are done: the pure
+decision kernel, the cgo/AppKit platform bridge, the switcher UI, the product surface (settings,
+preferences, packaging), polish (i18n, update check, accessibility labels), actionability (Phase 7 —
+`cg`-only raise, app-activate fallback, dead-window pruning), and reachability (Phase 8 — the
+menu-bar surface and one-time first-run permission onboarding). The switcher works end to end and the
+two Phase-0 budgets are met on the maintainer's Mac: **summon → pixels warm p95 15.25 ms** (D50) and
+**⌥⇥ callback 3.2 ms worst case** (D45).
+
+**What 1.0 does NOT claim.** Several Phase 6 rows still need hardware or a person the maintainer's
+machine cannot substitute for, and 1.0 ships without them rather than pretending they are done —
+consistent with this project's rule against a green light nobody measured:
+
+| still open | why it is not a 1.0 blocker |
+|---|---|
+| V6.2 — panel over full-screen / across Spaces | needs ≥ 2 Spaces and a human with a screenshot; the `collectionBehavior` is set, just unwitnessed |
+| V6.4 — thumbnail memory at 50 windows | needs a Mac with Screen Recording and that many windows |
+| V6.5 / V6.13 remainder — `cg`-only + minimized + hidden-app raise on real targets | agent host is not the `app.gotab` TCC identity, so its AX calls time out (PLATFORM-LESSONS §5) |
+| V6.7 — clean-account Gatekeeper + a real macOS 12.0–12.2 host | needs both, literally |
+| V6.9 — revoke → grant → recover, watched live | needs a person toggling System Settings |
+| V6.14 — dead-window pruning within one rescan, on a Mac | needs a real window server |
+| V6.15 — `open /Applications/GoTab.app` on a clean account | needs a clean account |
+| **V6.10 — full VoiceOver, heard not just written** | structural half passed (D51); the listening pass is a **committed follow-up** (owner: "implement it with next"), not a dropped feature — no accessibility code is removed |
+
+Each of these is a blocker for **the point release that claims it**, not for 1.0. They are sequenced
+after 1.0, not waved through.
+
+**Where it is recorded:** `README.md` status line, `docs/site/` (hero `status-note`, version pill →
+`v1.0.0`, example zip → `GoTab-v1.0.0.zip`), `AGENTS.md` status, and the Phase 6 note above. The
+`v1.0.0` annotated tag drives `.github/workflows/release.yml` the same as every tag since `v0.2.0`
+(D42).

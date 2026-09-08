@@ -4,11 +4,12 @@ A macOS window switcher written in Go. Built from scratch — its own bundle ID,
 from any existing install. Inspired by [AltTab](https://github.com/lwouis/alt-tab-macos); it shares
 none of its code.
 
-**Status: early release (`v0.4.0`).** Phases 0–8 are code-complete — the switcher works end to end,
-ships as a signed universal `.app`, has a menu-bar surface, and asks for its two permissions once on
-first run without blocking — and on-device verification (latency, multi-Space, VoiceOver, a
-clean-account launch) is still in progress. See [docs/ROADMAP.md](docs/ROADMAP.md) for exactly where
-it stands. Overview page: <https://elgx.me/gotab/>.
+**Status: `v1.0.0` — feature-complete.** Phases 0–8 are done: the switcher works end to end, ships as
+a signed universal `.app`, has a menu-bar surface, and asks for its two permissions once on first
+run without blocking. Latency is measured (~15 ms summon, ~3 ms hotkey). On-device verification on
+hardware and configs the maintainer's Mac can't stand in for — multi-Space, a clean-account launch,
+a macOS 12 host — and full VoiceOver support continue as point releases (D56). See
+[docs/ROADMAP.md](docs/ROADMAP.md) for exactly where it stands. Overview page: <https://elgx.me/gotab/>.
 
 ## Install
 
