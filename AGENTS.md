@@ -1,9 +1,11 @@
 # GoTab — working agreement
 
 A macOS window switcher in Go, built from scratch; nothing is inherited from any existing install.
-**Status: Phases 0–5 complete. Phase 6 (verification) in progress — V6.1 / V6.6 / V6.8 / V6.11 / V6.12
-done; V6.5 found a real gap (the switcher shows `cg`-only windows it cannot raise — D46) and opened
-**Phase 7 (actionability)**. Left: V6.2–V6.5, V6.7, V6.9, V6.10, and Phase 7 (P7.1–P7.4).**
+**Status: Phases 0–5 complete. Phase 7 (actionability) code-complete (P7.1–P7.4, D46 / D47) — the
+switcher now switches to a `cg`-only window's Space and resolves it (P7.3, private, unverified),
+falls back to activating its app (P7.1), and prunes genuinely-dead windows (P7.2). Phase 6
+(verification) in progress — V6.1 / V6.6 / V6.8 / V6.11 / V6.12 done. Left: V6.2–V6.5, V6.7, V6.9,
+V6.10, and V6.13 / V6.14 for Phase 7.**
 
 ## Read these first
 

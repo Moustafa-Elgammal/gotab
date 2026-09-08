@@ -102,6 +102,24 @@ The rules:
    (that mistake produced D4). Measurement is order-sensitive; CG raster pages go resident only while
    recently touched, so sample during a summon. `spike/procmem` does this for any pid.
 
+## The actionability rule
+
+The enumeration join (`internal/platform/darwin/window.go`, P2.3c / D21) deliberately shows windows
+Accessibility cannot see — usually on another Space. Every such tile must still *do something* when
+it is picked, or it should not be a tile (D46 / D47):
+
+- **A window that will not resolve to an `AXUIElement` is still actionable** while its owning process
+  is alive. `Raise` first tries to switch to the window's Space and resolve it for real (P7.3 —
+  SkyLight, private, optional, may be unavailable); failing that it activates the owning application
+  (P7.1). The user reaches what they aimed at even when the exact window cannot be ordered. Only a
+  dead owner is `ErrNoWindow`; `ErrTimeout` / `ErrNotTrusted` are still their own answers.
+- **A window leaves the model only when it is genuinely gone** (P7.2): absent from both enumerations
+  for a full rescan, or its owning pid no longer exists. A stale CoreGraphics entry does not keep it
+  on screen.
+- **The default is to keep an app-reachable window visible**, not hide it: it is useful (it reaches
+  the app), and hiding it makes the list shorter and less predictable. There is no `prefs` field to
+  hide these windows — add one only if that turns out to be wanted (P7.4).
+
 ## Threading
 
 macOS demands AppKit on the main thread; Go wants to schedule goroutines freely. The reconciliation:
