@@ -1090,3 +1090,10 @@ Append one line per session. Newest last. This is how a cold session learns what
   `can_defer` arg and now restores the activation policy after `runModal`. `check.sh` +
   `build.sh` (minos 12.0) green, no tests (D16 / D23). Verification: **V6.15**.
   **Next: unchanged — the human/hardware V6 checklist, now V6.13–V6.15 plus the earlier rows.**
+- `2026-09-08` — **Release `v0.4.0`.** Minor bump — the first tag since `v0.3.4` and the marker for
+  Phase 8 (reachability) being code-complete: the menu-bar surface (P8.1 / D54) plus first-run
+  onboarding (P8.2 / D55) — one combined permission prompt shown once, and a switcher that no longer
+  blocks on a missing grant. Site pill → `v0.4.0`, the download-link example zip name →
+  `GoTab-v0.4.0.zip`, `README.md` status → `v0.4.0`. `.github/workflows/release.yml` builds the
+  universal `.app`, cuts the GitHub Release with the zip + SHA-256, and renders `latest.json` + the
+  site to Pages from the annotated tag's subject line.
