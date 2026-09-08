@@ -90,7 +90,7 @@ func TestModelUpsertInsertAndUpdate(t *testing.T) {
 	modelCheckInvariants(t, m)
 }
 
-// A refresh that carries no Focus must not cost the window its MRU position (ALTTAB-LESSONS §3):
+// A refresh that carries no Focus must not cost the window its MRU position (PLATFORM-LESSONS §3):
 // title changes arrive constantly and are not attention decisions.
 func TestModelUpsertZeroFocusPreserves(t *testing.T) {
 	m := NewModel(2)

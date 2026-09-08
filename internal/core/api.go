@@ -22,7 +22,7 @@ type WindowID uint32
 type AppID int32
 
 // SpaceID identifies a macOS Space. Zero means unknown — SkyLight is a private API and can decline
-// to answer, and docs/ALTTAB-LESSONS.md §7 is explicit that unknown must stay distinguishable from
+// to answer, and docs/PLATFORM-LESSONS.md §7 is explicit that unknown must stay distinguishable from
 // "not on a Space". Never treat 0 as a real Space.
 type SpaceID uint64
 
@@ -116,7 +116,7 @@ type Model struct {
 // Order is a presentation order over the Model: a permutation of row indices, reused across
 // summons so the hot path allocates nothing. Never store WindowIDs here — rows move on removal.
 //
-// docs/ALTTAB-LESSONS.md §3 is the constraint that matters: only an attention decision (the user
+// docs/PLATFORM-LESSONS.md §3 is the constraint that matters: only an attention decision (the user
 // focused something) or a structural repair (a window appeared or vanished) may reorder. A title
 // change, a resize, or a redraw must NOT.
 type Order struct {

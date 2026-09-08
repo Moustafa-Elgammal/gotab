@@ -5,15 +5,15 @@
 
 ## What this is
 
-A macOS window switcher written in Go. Clean-slate rewrite of AltTab: **new bundle ID, no license
+A macOS window switcher written in Go, built from scratch: **its own bundle ID, no license
 migration, no Sparkle continuity, no preference migration.** Nothing on a user's machine is inherited.
 
 Goal, in priority order:
-1. **Feature parity with AltTab's core switching.** The switcher itself, not its whole surface. This is
-   the reason the project exists.
+1. **Feature parity with the core switching a keyboard window switcher is expected to do.** The
+   switcher itself, not a whole product surface. This is the reason the project exists.
 2. **Learn Go properly** — idiomatic concurrency, explicit resource lifecycle, zero-alloc hot paths.
 3. **Stay within a sane memory budget** — bounded caches, no leaks. A correctness requirement, not a
-   competition with AltTab; see D10 for why that framing was dropped.
+   competition with any other switcher; see D10 for why that framing was dropped.
 
 Non-goals: cross-platform, macOS < 12 (the toolchain forces `minos 12.0` — measured on Go 1.26, not
 assumed; D2 said 11.0 and D17 corrects it), Pro/licensing.
@@ -94,8 +94,8 @@ The rules:
    convenience, which is exactly the problem we're solving.
 3. **The cache is bounded and that bound is a number, not a hope.** A fixed-capacity LRU keyed by window id.
    Bound it for **peak footprint and fault-in latency**, not resident size: macOS already reclaims idle
-   CG raster pages on its own (D9, confirmed against AltTab in D10), so the bound buys predictability and
-   a warm cache on summon, not a smaller steady state.
+   CG raster pages on its own (D9, confirmed against a comparable switcher in D10), so the bound buys
+   predictability and a warm cache on summon, not a smaller steady state.
 4. **Thumbnails are downscaled at capture time**, never captured full-res then shrunk.
 5. **When memory is measured at all, use D8's instrument** — `vmmap --summary` -> `CG raster data`, plus
    `Physical footprint (peak)`. Never instantaneous `phys_footprint`: it silently under-reports bitmaps
@@ -112,8 +112,9 @@ macOS demands AppKit on the main thread; Go wants to schedule goroutines freely.
   communicating, not by locking. No mutex around the window model.
 - UI mutations marshal back via `dispatch_async(dispatch_get_main_queue())`. Never touch AppKit from a
   non-main goroutine; it asserts at runtime.
-- Latency-critical ordering, inherited from AltTab's hard-won experience: on summon, **draw first, do
-  bookkeeping after**. Nothing that can block on IPC runs before the pixels the user is waiting for.
+- Latency-critical ordering, a hard-won lesson of the platform (PLATFORM-LESSONS.md §6): on summon,
+  **draw first, do bookkeeping after**. Nothing that can block on IPC runs before the pixels the user
+  is waiting for.
 
 ## Testing
 

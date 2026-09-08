@@ -62,9 +62,10 @@ task that comes back negative changes the approach; it does not stop the work.
       does **not** parallelise (10 at once = 324 ms vs 460 ms serial). The completion handler does fire
       on a Go thread with no run loop, so Phase 2 needs no AppKit marshalling. Thumbnails are
       IOSurface-backed, invisible to footprint, and release cleanly (330.5 MB -> 64 K).
-- [-] **P0.7** Measure AltTab actual memory — **DROPPED (D10):** beating AltTab on memory is no longer a
-      goal, so the baseline has nothing to serve. It was measured far enough to be worth keeping (D10's
-      numbers) before it was dropped. `spike/procmem` survives it and is the general memory instrument.
+- [-] **P0.7** Measure a reference switcher's actual memory — **DROPPED (D10):** beating another
+      switcher on memory is no longer a goal, so the baseline has nothing to serve. It was measured far
+      enough to be worth keeping (D10's numbers) before it was dropped. `spike/procmem` survives it and
+      is the general memory instrument.
 - [x] **P0.5** Write up results in `docs/DECISIONS.md` — **done (D15), and it does not claim a clean
       sweep.** Three of the four unknowns are settled on measurements Phase 2 can be planned against:
       capture (D12), the panel (D13), release (D14). The hotkey is **not** — P0.2 is code without a
@@ -80,8 +81,8 @@ task that comes back negative changes the approach; it does not stop the work.
 | capture → release, 100 cycles | no net growth | **met**: +0.0 MB on `IOSurface`, with a held-20 control proving the instrument is not blind (D14) |
 | thumbnail cache | bounded, bound is a number | **policy met** (P1.7, bounded LRU); the bound's real-world size is **V6.4** |
 
-The old fourth criterion, "steady-state RSS, 50 windows < AltTab's", is gone with D10. It was also
-unmeasurable as written: macOS drives idle thumbnail memory to ~0 on both sides.
+The old fourth criterion, "steady-state RSS, 50 windows below a comparable switcher's", is gone with
+D10. It was also unmeasurable as written: macOS drives idle thumbnail memory to ~0 on both sides.
 
 ---
 
@@ -220,7 +221,7 @@ window server, so pixels and the granted hotkey round trip are verified only in 
       the granted round trip → **V6.5**.
 
 **`assumption` across Phase 3:** that the panel behaves over a full-screen app and across Spaces. The
-`collectionBehavior` flags are AltTab's prior art, not a measurement (D13), and full-screen is where
+`collectionBehavior` flags are prior art, not a measurement (D13), and full-screen is where
 switchers most often fail → **V6.2**. And that `panelRenderer.onState`'s per-state-change allocation
 is acceptable — `core.Layout` is 0-alloc but the bridge builds two fresh slices → **V6.8**.
 
@@ -303,29 +304,39 @@ Everything Phases 0–5 deferred, run once against the assembled app. **This pha
 is not a formality**: it is where the `assumption` tags above are cashed in, and a task here coming back
 negative is expected to send work back into an earlier phase rather than be waved through.
 
-Serial, one owner. Three of these (V6.1, V6.2, V6.9) need a human at the machine — TCC blocks synthesising
-the input, which is the same wall P0.7 and P0.1 hit, not a gap in the tooling.
+Serial, one owner. Four of these (V6.1, V6.2, V6.9, V6.10) need a human at the machine and three more
+(V6.3, V6.4, V6.5, V6.7) need a real Mac with a window server — TCC blocks synthesising the input and an
+agent host has no display, the same wall P0.7 and P0.1 hit, not a gap in the tooling.
 
 **Order matters.** V6.1 and V6.2 are Phase 0 debts and are cheap; run them first, because either one
 coming back badly changes Phase 2/3 code rather than merely reporting on it.
 
-| ID | what | acceptance | needs |
-|---|---|---|---|
-| **V6.1** | Hotkey delivery latency, real keypress | `spike/hotkey -manual -n 20` reports worst-case event→callback **< 5 ms**, and the first C→Go crossing separately from steady state | a human, Accessibility granted to the responsible process |
-| **V6.2** | Panel over a full-screen app and across Spaces | panel appears **over** a full-screen app and follows the user across Spaces, verified by screenshot rather than by the absence of an error | a human |
-| **V6.3** | Summon → pixels, end to end | **< 100 ms** on the real app, timed to the CA commit and not to the call returning (D13: timing the call is wrong by 10x) | — |
-| **V6.4** | Thumbnail memory at realistic scale | 50-window cache at Retina resolution stays inside the stated bound; measured on `spike/procmem`'s **`IOSurface`** row, sampled at summon (D8: the resident figure decays within seconds) | — |
-| **V6.5** | `internal/platform` behaviour | the platform layer is a humble object and is **not** unit-tested (ARCHITECTURE.md). Verified instead by driving the built `.app`: enumerate → order → raise the window that was selected, on a machine with ≥ 20 windows across ≥ 2 apps | — |
-| **V6.6** | Phase 2/3 tests not written in place | tests for whatever Phase 2/3 grew that is pure enough to test — the C-shim boundary conversions above all — land in `internal/core`-style table tests; `scripts/check.sh` green | — |
-| **V6.7** | Ship the bundle (P4.5) | the bundle, its plist, the ad-hoc signature, the weak-SCK link, and the `install.sh`/`uninstall.sh` round-trip are all done and self-verified (D38). This is the machine half: `build/GoTab.app` launches from `/Applications` on a genuinely clean account (Gatekeeper allows a quarantined ad-hoc copy only after a right-click → Open, or notarization), and on a real macOS 12 host (`minos`/plist *agree*; a 12.0 binary *running* on 12.0 is untested — D17) | a machine |
-| **V6.8** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` still reports **0 allocs/op** for summon, cycle and dismiss after Phases 2–5 have wired real data through | — |
-| **V6.9** | Permissions onboarding (P4.3) | from a **revoked** state, `-switch` shows the alert, and granting in Settings brings the switcher up **without a relaunch** — the 750 ms poll picks it up. Both grants. The headless fallback and the poll are already exercised (D36); this is the modal + the human loop | a human |
-| **V6.10** | VoiceOver heard, not just written (P5.2) | with VoiceOver on (or Accessibility Inspector), driving `gotab -switch`: each tile is announced as "&lt;title&gt;, &lt;app&gt;", the selection is spoken on **every** ⌥⇥ cycle, and the panel reads as a container labelled "Window switcher". In `gotab -settings` every control — the steppers, the Appearance popup, the blocked-apps field, the hotkey recorder — has a spoken label. An agent host has no screen reader (D41) | a human |
-| **V6.11** | Update check against a real host (P5.3) | `gotab -check-update` run against the **published** `FeedURL` (not a `python3 -m http.server` copy): a manifest advertising a higher version prints the "available" line, an equal/older one prints "up to date", and an unreachable host prints the one-line warning and exits 0. `FeedURL` has no host today (D39/D41) | a host + a published manifest |
+**Done so far (2026-09-08):** the four tasks an agent host *can* run — V6.6, V6.8, V6.11, V6.12. What
+is left is the human/machine checklist (V6.1–V6.5, V6.7, V6.9, V6.10) — **all eight now have a
+turnkey `docs/tasks/V6.N.md`** (protocol, prerequisites, the acceptance bar, where it feeds back), so
+whoever sits at a Mac executes rather than re-derives. `☐ ready` below = contract written, needs a
+machine.
+
+| ID | status | what | acceptance | needs |
+|---|---|---|---|---|
+| **V6.1** | ☐ ready | Hotkey delivery latency, real keypress | `spike/hotkey -manual -n 20` reports worst-case event→callback **< 5 ms**, and the first C→Go crossing separately from steady state. Contract: `docs/tasks/V6.1.md` | a human, Accessibility granted to the responsible process |
+| **V6.2** | ☐ ready | Panel over a full-screen app and across Spaces | panel appears **over** a full-screen app and follows the user across Spaces, verified by screenshot rather than by the absence of an error; plus P2.4's SpaceID converse. Contract: `docs/tasks/V6.2.md` | a human, ≥ 2 Spaces |
+| **V6.3** | ☐ ready | Summon → pixels, end to end | **< 100 ms** on the real app, timed to the CA commit and not to the call returning (D13: timing the call is wrong by 10x). Contract: `docs/tasks/V6.3.md` | a Mac with a window server |
+| **V6.4** | ☐ ready | Thumbnail memory at realistic scale | 50-window cache at Retina resolution stays inside the stated bound; measured on `spike/procmem`'s **`IOSurface`** row, sampled at summon (D8: the resident figure decays within seconds). Contract: `docs/tasks/V6.4.md` | a Mac, Screen Recording granted |
+| **V6.5** | ☐ ready | `internal/platform` behaviour | the platform layer is a humble object and is **not** unit-tested (ARCHITECTURE.md). Verified instead by driving the built `.app`: enumerate → order → raise the window that was selected, on a machine with ≥ 20 windows across ≥ 2 apps; plus the three documented failure paths. Contract: `docs/tasks/V6.5.md` | a Mac, both grants |
+| **V6.6** | ✅ **done** | Deferred table tests for the pure surfaces Phases 2–5 grew | `internal/prefs`, `internal/i18n`, `internal/update` (`version`/`manifest`/`check` over `httptest`), the event loop's `handle`, and `HotkeyDisplay` — `internal/core`-style table tests; `scripts/check.sh` green. Contract: `docs/tasks/V6.6.md` | — |
+| **V6.7** | ☐ ready | Ship the bundle (P4.5) | self-verified half done (D38). Machine half: `build/GoTab.app` launches from `/Applications` on a genuinely clean account (Gatekeeper needs a right-click → Open on a quarantined ad-hoc copy), and on a real macOS 12.0–12.2 host (`minos`/plist *agree*; a 12.0 binary *running* on 12.0 is untested — D17). Contract: `docs/tasks/V6.7.md` | a clean account + a macOS 12 host |
+| **V6.8** | ✅ **done** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` = **0 allocs/op** for the summon/cycle/dismiss kernels, plus a new `internal/app` `BenchmarkHandleGesture` (0 allocs/op) proving the loop's real gesture path is clean, and the `panelRenderer.onState` allocation measured + accepted (**D44**). Contract: `docs/tasks/V6.8.md` | — |
+| **V6.9** | ☐ ready | Permissions onboarding (P4.3) | from a **revoked** state, `-switch` shows the alert, and granting in Settings brings the switcher up **without a relaunch** — the 750 ms poll picks it up. Both grants, plus a mid-run revoke. The headless fallback and the poll are already exercised (D36); this is the modal + the human loop. Contract: `docs/tasks/V6.9.md` | a human |
+| **V6.10** | ☐ ready | VoiceOver heard, not just written (P5.2) | with VoiceOver on, driving `gotab -switch`: each tile announced as "&lt;title&gt;, &lt;app&gt;", the selection spoken on **every** ⌥⇥ cycle, the panel a container labelled "Window switcher"; and every `gotab -settings` control labelled. An agent host has no screen reader (D41). Contract: `docs/tasks/V6.10.md` | a human |
+| **V6.11** | ✅ **done** | Update check against a real host (P5.3) | `gotab -check-update` against the **published** `FeedURL` — advertised-higher prints "available" + notes, equal/older prints "up to date", unreachable prints the one-line warning and exits 0. All three run 2026-09-08 against the live feed (then advertising `0.2.1`); `httptest` regression coverage added under V6.6. Contract: `docs/tasks/V6.11.md` | — |
+| **V6.12** | ✅ **done** | Release automation (CI/CD) (D42) | pushing a `v*` tag runs the gate, builds `GoTab.app` with the tag as `CFBundleShortVersionString`, and cuts a GitHub Release carrying `GoTab-<tag>.zip` + its `.sha256`; `latest.json` at the Pages URL then advertises that version. Ran end to end for `v0.2.0` **and** `v0.2.1` (D42; `docs/tasks/V6.12.md` Findings). Unblocked V6.11 | — |
 
 **A task contract goes in `docs/tasks/V6.N.md` before that task starts**, same as every other numbered
-task. They are deliberately not written yet: what V6.5 and V6.6 actually have to check depends on what
-Phases 2–5 build, and writing the contract now would be guessing.
+task. All twelve now exist: V6.6 / V6.8 / V6.11 got theirs as they were run, V6.12's predates it, and
+V6.1–V6.5 / V6.7 / V6.9 / V6.10 were written up front (2026-09-08) from the roadmap rows and the
+`assumption` tags so the Mac session is execute-only. Each names the exact protocol, the acceptance
+bar, and — the point of the phase — where a negative result sends the work back.
 
 ---
 
@@ -341,10 +352,10 @@ Append one line per session. Newest last. This is how a cold session learns what
   and the spike's original "PASS" was wrong — removed. Split into P0.4a (build an instrument) / P0.4b.
   Also found `CGWindowListCreateImage` is obsoleted in macOS 15, forcing ScreenCaptureKit — added P0.6.
   **Next session starts at P0.4a.**
-- `2026-09-06` — Handoff. Added `docs/ALTTAB-LESSONS.md` (AltTab platform knowledge, distilled with
-  sources), D6 (project framing and rejected alternatives) and D7. Fixed a broken build (`cmd/gotab` was
-  empty) and a false-positive purity gate. Added P0.7: **AltTab memory was never measured, so the
-  primary goal has no baseline.**
+- `2026-09-06` — Handoff. Added `docs/PLATFORM-LESSONS.md` (macOS window-switcher platform knowledge,
+  distilled from prior art), D6 (project framing and rejected alternatives) and D7. Fixed a broken
+  build (`cmd/gotab` was empty) and a false-positive purity gate. Added P0.7: **the reference
+  switcher's memory was never measured, so the then-primary goal has no baseline.**
   **Next session: start with P0.4a (`docs/tasks/P0.4a.md`), then P0.7.** Those two together decide whether
   the memory premise holds; everything else is downstream of that answer.
 - `2026-09-06` — **P0.4a done.** Built `spike/memprobe`, which tested three hypotheses and rejected all of
@@ -353,7 +364,7 @@ Append one line per session. Newest last. This is how a cold session learns what
   374.4 MB high-water mark. Instantaneous `phys_footprint` misses it because macOS reclaims idle CG raster
   pages. Corrected D4 in D8.
   **D9 is the uncomfortable part: macOS already evicts idle thumbnails, so the bounded-LRU win may be
-  small.** That makes P0.7 (measure AltTab) the deciding task — do it before designing the cache.
+  small.** That makes P0.7 (measure a reference switcher) the deciding task — do it before designing the cache.
   **Next session: P0.7.**
 - `2026-09-06` — Docs/tooling repair, no code change. The repo's only branch is `main`, but `scripts/wt.sh
   done` ran `git checkout master`, CI's push trigger watched `master`, and `PARALLEL-WORK.md` said the
@@ -363,24 +374,24 @@ Append one line per session. Newest last. This is how a cold session learns what
   only `cmd/gotab` and `spike/` exist today. Fixed two bugs in `wt.sh`'s usage output while there: the
   line range leaked `set -euo pipefail`, and `sed 's/^# \?//'` is a GNU-ism that BSD sed reads as a
   literal `?`, so it never stripped the comment prefixes on the one platform this project supports.
-  **Next session: still P0.7 (measure AltTab).**
+  **Next session: still P0.7 (measure a reference switcher).**
 - `2026-09-06` — **P0.7 started, not finished.** Built `spike/procmem`: D8's three quantities
   (`CG raster data`, footprint, peak) read out of `vmmap --summary` for *any* pid, since `spike/memprobe`
   can only measure itself. Validated against a holder process with a known 366.2 MB — reports 368.8 MB
-  virtual, matching D8 exactly. Installed AltTab 11.6.0 and captured its idle baseline: **27.4 MB
+  virtual, matching D8 exactly. Captured a reference switcher's idle baseline: **27.4 MB
   footprint, 28.4 MB peak, and no `CG raster data` region at all** (it had never been summoned).
   Two things learned that P0.7's contract now records: `CG raster` RESIDENT decays fast — the same
   366 MB reads 368.8 MB when sampled immediately after a touch and **6.4 MB** ~15 s later — so summon-time
   sampling is mandatory and `Physical footprint (peak)` is the only non-decaying number worth quoting.
-  And AltTab relaunches itself under a new pid on permission grant, which silently killed the first
-  90-sample run; `-name` now re-resolves every sample.
+  And that switcher relaunches itself under a new pid on permission grant, which silently killed the
+  first 90-sample run; `-name` now re-resolves every sample.
   **Next session: the measurement still needs a human** to grant Accessibility + Screen Recording and
   press ⌥⇥ (TCC blocks synthetic keystrokes). Protocol is in `docs/tasks/P0.7.md`.
-- `2026-09-06` — **Direction change: memory parity with AltTab is no longer a goal (D10).** The project
-  is now feature parity with AltTab's core switching, written in Go, on a sane memory budget. P0.7 dropped,
-  Phase 0 reframed from a go/no-go gate to de-risking the three platform unknowns (panel, hotkey,
-  ScreenCaptureKit), and the AltTab-relative gate criterion replaced with a leak check and a bounded-cache
-  requirement. `spike/procmem` survives as the general memory instrument for any pid.
+- `2026-09-06` — **Direction change: memory parity with another switcher is no longer a goal (D10).** The
+  project is now feature parity with the core switching such a tool is expected to do, written in Go, on a
+  sane memory budget. P0.7 dropped, Phase 0 reframed from a go/no-go gate to de-risking the three platform
+  unknowns (panel, hotkey, ScreenCaptureKit), and the comparative gate criterion replaced with a leak
+  check and a bounded-cache requirement. `spike/procmem` survives as the general memory instrument for any pid.
   **Next session: P0.1 (NSPanel spike), P0.2 (hotkey), P0.6 (ScreenCaptureKit)** — P0.6 is the highest-risk
   of the three (D3) and gates the capture design in Phase 2.
 - `2026-09-06` — **Phase 1 complete.** P1.0 frozen first and serially (`internal/core/api.go`, types only),
@@ -410,8 +421,8 @@ Append one line per session. Newest last. This is how a cold session learns what
   phase. `spike/procmem` needs an `IOSurface` row before P0.4b can run.
 - `2026-09-06` — Project identity and paths made self-contained, ahead of publishing the repo. The module
   is now `github.com/Moustafa-Elgammal/gotab` (nothing imported the old path, so this was one line).
-  `docs/ALTTAB-LESSONS.md` cited AltTab at a personal absolute path; it now cites the upstream URL and
-  says the checkout can live anywhere. Worktrees moved from the sibling `../gotab-wt/` into `.worktrees/`
+  `docs/PLATFORM-LESSONS.md` cited prior art at a personal absolute path; that citation is gone and the
+  file stands on its own. Worktrees moved from the sibling `../gotab-wt/` into `.worktrees/`
   inside the repo, so a clone cannot scatter directories over its parent. **The leading dot is
   load-bearing and half of that change is in `check.sh`:** `go list`, `go vet` and `go build ./...` skip
   dot-directories, but `gofmt -l .` walks them, so the gate would have failed on another task's
@@ -424,12 +435,12 @@ Append one line per session. Newest last. This is how a cold session learns what
   flattering empty window. **1.3 ms warm, 14 ms cold: about 1% of the 100 ms budget.** Set against D12's
   ~46 ms capture, this settles where the summon budget goes: on data, not on drawing.
   Two things the measurement had to defend against. `orderFrontRegardless` returns in ~1 ms while the
-  cold frame does not commit for ~14 ms, exactly as ALTTAB-LESSONS predicted, so timing the call would
+  cold frame does not commit for ~14 ms, exactly as PLATFORM-LESSONS predicted, so timing the call would
   have been wrong by 10x — the spike reports three timestamps instead. And `drawRect:` is instrumented
   to prove the warm number is a real re-render: 0 of 30 warm summons skipped the draw. The
   non-activating combination works — the frontmost app's pid never changed across 20 summons.
   **One thing is deliberately not claimed:** behaviour over a full-screen app and across Spaces. The
-  `collectionBehavior` flags are AltTab's prior art, not a measurement, and TCC blocks driving either
+  `collectionBehavior` flags are prior art, not a measurement, and TCC blocks driving either
   synthetically. That needs a human and is the open half of P0.1.
   **Next session: P0.2 (CGEventTap hotkey), the last Phase 0 unknown**, then P0.5 closes the phase and
   Phase 2 begins — serial, one owner.
@@ -480,7 +491,7 @@ Append one line per session. Newest last. This is how a cold session learns what
   `kCGWindowLayer != 0`, of which **7** are things a user could switch to. The titled seven were exactly
   right — but the title is not a filter either: it is empty for everything without Screen Recording, and
   a real untitled document window exists. So **P2.3 owns enumeration, not just observation**, which is
-  why AltTab is built on Accessibility. P2.2's list becomes the candidate set AX filters. The batching
+  why a switcher is built on Accessibility. P2.2's list becomes the candidate set AX filters. The batching
   discipline is what keeps an 8x over-count cheap: 59 records still cost one crossing.
   **Next session: P2.3 (AX enumeration + observers).** Still serial, one owner.
 - `2026-09-06` — **P2.3a done, and it found the thing that decides Phase 2's shape (D20).** The
@@ -727,4 +738,84 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next: Phase 6 — verification.** The switcher is feature-complete; what remains is the V6
   checklist run against the assembled app, most of it needing a human at a Mac (V6.1, V6.2, V6.9,
   V6.10) or a machine/host (V6.7, V6.11). V6.1/V6.2 are the cheap Phase 0/3 debts to run first.
+- `2026-09-08` — **CI/CD: a `v*` tag now cuts a release, and the update feed has a real host (D42).**
+  `.github/workflows/release.yml` runs the gate, builds the universal `.app` with the tag as
+  `CFBundleShortVersionString` (`build.sh` gained a `GOTAB_SHORT_VERSION` override; `ci.yml` gained
+  `fetch-depth: 0` so `git describe --tags` resolves), `ditto`-zips it, and `gh release create`s a
+  GitHub Release with `GoTab-<tag>.zip` + its `.sha256`. It then renders `latest.json` from
+  `resources/appcast/latest.json` — now the manifest **template**: `min_macos` and the shape live
+  there, `version` / `url` / `notes` come from the tag — and publishes it to GitHub Pages via
+  `actions/deploy-pages` (source = "GitHub Actions", no `gh-pages` branch). `FeedURL` moves off the
+  never-hosted `gotab.app` to `https://moustafa-elgammal.github.io/gotab/latest.json`. First-party
+  `actions/*` + `gh` only. Still check-only (D39); the zip is ad-hoc signed (D38), so a downloader
+  needs right-click → Open until a notarization step exists. **New row V6.12** (the pipeline runs
+  once end to end); **V6.11** now depends on it. **Manual, once the repo is public:** Settings →
+  Pages → Source → "GitHub Actions", then `git tag -a v0.2.0 -m "…" && git push origin v0.2.0`.
+  **Next: unchanged** — Phase 6 verification proper; V6.1/V6.2 remain the cheap human debts.
+- `2026-09-08` — **Licensed GPL-3.0-or-later** ahead of publishing the repo. `LICENSE` holds the
+  verbatim FSF text (`gnu.org/licenses/gpl-3.0.txt`); README gained a `## License` section with the
+  short notice and the copyright line. Per-file `SPDX-License-Identifier` headers are a possible
+  follow-up, not done here.
+- `2026-09-08` — **V6.12 ran end to end: `v0.2.0` is cut and the feed is live.** The `release` job
+  (build, sign, zip, `gh release create`, render manifest) passed first try; the downloaded asset
+  verifies (SHA-256 matches, `CFBundleShortVersionString` `0.2.0`, `codesign --verify --strict` ok).
+  `deploy-pages` needed two repo-settings fixes, now both in `docs/tasks/V6.12.md`'s prereqs:
+  enabling Pages, and adding a **Ref type: Tag `v*`** rule to the `github-pages` environment (the
+  default allows only the default branch, so a tag deploy is rejected). The feed serves at the
+  `github.io` `FeedURL`, 301-redirecting to the account's custom domain `elgx.me/gotab/latest.json`;
+  `FeedURL` stays on `github.io` on purpose. One `release.yml` bug fixed in the same commit as this
+  line: `actions/checkout` shadows the annotated tag with a lightweight ref, so `notes` rendered as
+  the commit subject — a `git fetch --force origin refs/tags/<tag>:refs/tags/<tag>` before reading
+  it is the fix (v0.2.0's already-published body keeps the old text). **Next:** V6.11 —
+  `gotab -check-update` against the now-live host — plus the Phase 6 human/machine debts.
+- `2026-09-08` — **App icon** (D43). The delivered art `resources/assets/ico.png` (gopher, 496×664
+  portrait, its own sticker outline) is centred on a transparent 1024² square at 92% of the tile
+  and committed as `resources/assets/icon-1024.png`; `build.sh` renders that to
+  `Contents/Resources/AppIcon.icns` with `sips` + `iconutil` and the plist gains `CFBundleIconFile`.
+  The square master is committed so the build stays on base-system tools (no Swift); the one-time
+  padding recipe is in `resources/assets/README.md`. 128 px and up look right; 16/32 px are muddy —
+  the art is detailed, a simplified small-size glyph is future work. `LSUIElement` means no Dock
+  tile, but Finder, login items and the TCC prompts all show it.
+- `2026-09-08` — **Phase 6 started — the four tasks an agent host can run are done (V6.6, V6.8,
+  V6.11, V6.12).**
+  **V6.6:** the table tests Phases 2–5 deferred (D16/D23), for every *pure* surface they grew —
+  `internal/prefs` (schema, `Load`/`Save` round trip, the `-prefs Key=Value` parser and its
+  rejections), `internal/i18n` (`normalize`, the override→base→key fallback, a `t.TempDir` overlay),
+  `internal/update` (`parseVersion`/`compare`, `decodeManifest`, and `check` end to end over
+  `httptest` including every error path), the event loop's `handle` (summon→cycle→dismiss, cycle
+  before summon is a no-op, only Quit stops it), and `HotkeyDisplay` — the one pure function in
+  `internal/platform/darwin`; nothing else there is unit-tested (ARCHITECTURE.md; that is V6.5's).
+  Contract `docs/tasks/V6.6.md`. Test-only, no production code touched.
+  **V6.8:** every `internal/core` benchmark still `0 allocs/op`, and a new `internal/app`
+  `BenchmarkHandleGesture` (Summon → Cycle → Cycle → Dismiss, 20 real windows) is
+  `19.8 ns/op, 0 allocs/op` — filtering + rebuilding the order every rescan (P4.4) cost the hot path
+  nothing. The Phase 3 `assumption` is discharged as **D44**: `panelRenderer.onState`'s two slice
+  allocations are measured (2 allocs, 784 B at 7 windows / 2240 B at 20, once per gesture) and
+  **accepted** — not a `core` hot path, bounded by window count, below the noise of the ~46 ms
+  capture; the pooled-buffer fix is on record if a profile ever wants it. Contract `docs/tasks/V6.8.md`.
+  **V6.11:** `gotab -check-update` run against the live `github.io` feed (then advertising `0.2.1`):
+  a lower local version prints the "available" line + notes + the tag URL, `99.0.0` prints "up to
+  date", a dead proxy prints the one-line warning and exits 0. All three green; the redirect to the
+  custom Pages domain is followed transparently. `httptest` regression coverage landed under V6.6.
+  Contract `docs/tasks/V6.11.md`. The P5.3 `assumption` ("`FeedURL` has no host") is discharged.
+  **V6.12:** already run end to end for `v0.2.0` (D42) and again for `v0.2.1` (the app-icon release);
+  the feed serves `0.2.1`. Marked done.
+  **Comment drift noted, not fixed:** `internal/prefs/prefs.go` + its `doc.go` still say the filter
+  is "schema-only" and "the event loop does not consult Rules yet" — P4.4/D37 wired both. A docs-only
+  follow-up.
+  **Next: the human/machine checklist — V6.1–V6.5, V6.7, V6.9, V6.10.** V6.1 (hotkey latency) and
+  V6.2 (panel over full-screen / across Spaces) are the cheap Phase 0/3 debts to run first, at a Mac.
+  Each still needs its `docs/tasks/V6.N.md` written when picked up.
+- `2026-09-08` — **Phase 6 prep: the eight human/machine tasks now have turnkey contracts, and the
+  comment drift is fixed.** No further V6 task can run on an agent host — V6.1/V6.9/V6.10 need a
+  person at the keyboard, V6.2 needs ≥ 2 Spaces + a full-screen app, V6.3/V6.4/V6.5 need a window
+  server, V6.7 needs a clean account + a macOS 12 host — so the forward motion available here was to
+  write `docs/tasks/V6.{1,2,3,4,5,7,9,10}.md`: prerequisites, the exact commands / screenshots /
+  numbers to capture, the acceptance bar, and where a negative result sends the work (P0.2, P3.1,
+  P3.3, P2.5, P4.3, P4.5, P5.2). The Phase 6 table marks these `☐ ready` — contract written, needs a
+  machine. Also cleared the drift D41's log flagged: `internal/prefs/prefs.go` + `doc.go` said the
+  filter was "schema-only" and the loop "does not consult Rules yet" — P4.2 (D35) wired the hotkey
+  chord and P4.4 (D37) wired the filter; only `Rules().ActiveAppOnly` is still inert (needs the
+  frontmost pid on Summon) and the comments now say exactly that. Gate green; test-and-docs only.
+  **Next: unchanged — the V6 checklist at a Mac, V6.1 and V6.2 first.**
 

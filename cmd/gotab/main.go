@@ -118,7 +118,7 @@ func reportPermissions() int {
 	}
 	// The grant belongs to the *responsible* process, so running this under `go run` reports the
 	// terminal's permissions rather than gotab's. Saying so here saves the next person the hour
-	// ALTTAB-LESSONS section 5 documents.
+	// PLATFORM-LESSONS section 5 documents.
 	fmt.Fprintln(os.Stderr, "\nGrant these in System Settings > Privacy & Security:")
 	if !p.Accessibility {
 		fmt.Fprintln(os.Stderr, "  "+paneAccessibility)

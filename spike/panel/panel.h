@@ -13,7 +13,7 @@ enum {
 // One summon, measured three ways. All milliseconds from the moment the summon began.
 //
 // The three exist because they are not the same number and the difference is the finding: AppKit
-// returning from an order-front call says nothing about pixels (ALTTAB-LESSONS section 5 -
+// returning from an order-front call says nothing about pixels (PLATFORM-LESSONS section 5 -
 // CoreAnimation commits at the end of the runloop turn).
 typedef struct panel_sample {
     double call_ms;    // makeKeyAndOrderFront returned

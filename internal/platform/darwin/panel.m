@@ -167,8 +167,9 @@ static void a11y_sync(void) {
 }
 
 // ---------------------------------------------------------------------------
-// The one view that draws every tile. AltTab has 53 NSView subclasses and pays a C->Go callback per
-// tile; this draws them all in drawRect: and keeps thumbnails in dumb CALayers that never call back.
+// The one view that draws every tile. The conventional design gives every tile its own NSView and
+// pays a C->Go callback per tile; this draws them all in drawRect: and keeps thumbnails in dumb
+// CALayers that never call back.
 // ---------------------------------------------------------------------------
 
 @interface GTTileView : NSView

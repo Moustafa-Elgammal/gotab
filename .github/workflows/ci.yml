@@ -11,6 +11,8 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # so `git describe --tags` in build.sh resolves once release tags exist
 
       - uses: actions/setup-go@v5
         with:

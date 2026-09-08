@@ -22,8 +22,8 @@
 //
 // The symbols have carried the CGS prefix since well before Mission Control and SkyLight also exports
 // SLS-prefixed aliases for all of them (both were present on this machine). CGS is the older and
-// better-attested spelling and every window manager that works -- AltTab, yabai, Hammerspoon -- uses
-// it, so that is what is asked for first.
+// better-attested spelling and every window manager that works -- yabai, Hammerspoon, and others --
+// uses it, so that is what is asked for first.
 typedef int gt_cgs_connection;
 
 typedef gt_cgs_connection (*gt_fn_main_connection)(void);

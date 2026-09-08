@@ -21,7 +21,7 @@ func (r Rules) Allows(m *Model, row int) bool {
 		return false
 	}
 	// A zero SpaceID on either side means SkyLight declined to answer, not "some other Space"
-	// (api.go SpaceID, ALTTAB-LESSONS §7). Comparing it would empty the switcher wholesale on a
+	// (api.go SpaceID, PLATFORM-LESSONS §7). Comparing it would empty the switcher wholesale on a
 	// machine where the private API is unavailable, which reads as the app being broken.
 	// TestFilterUnknownSpace pins both directions.
 	if !r.ShowOtherSpace && r.CurrentSpace != 0 && m.Spaces[row] != 0 && m.Spaces[row] != r.CurrentSpace {

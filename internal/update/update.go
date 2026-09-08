@@ -2,10 +2,12 @@ package update
 
 import "context"
 
-// FeedURL is where Check looks for the release manifest. It is a placeholder
-// until a real host exists (V6.11); an unreachable URL simply makes Check return
-// an error, which every caller treats as "no update, carry on".
-var FeedURL = "https://gotab.app/appcast/latest.json"
+// FeedURL is where Check looks for the release manifest. GitHub Actions regenerates
+// and publishes it to GitHub Pages on every v* tag (.github/workflows/release.yml, D42);
+// the GoTab repo must be public for Pages to serve it, so until then this behaves exactly
+// like the old placeholder. An unreachable URL simply makes Check return an error, which
+// every caller treats as "no update, carry on". V6.11 verifies it against the live host.
+var FeedURL = "https://moustafa-elgammal.github.io/gotab/latest.json"
 
 // Result is what Check found. The zero value — Available false, empty strings —
 // is the safe "nothing to do" answer, and is what a caller gets on any error.

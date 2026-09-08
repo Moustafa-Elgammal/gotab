@@ -140,7 +140,7 @@ func (l *Loop) Run(ctx context.Context) error {
 func (l *Loop) handle(e Event) bool {
 	switch e.Kind {
 	case Focused:
-		// An attention decision: one of the two things ALTTAB-LESSONS section 3 permits to reorder.
+		// An attention decision: one of the two things PLATFORM-LESSONS section 3 permits to reorder.
 		if l.model.Touch(e.Window) {
 			if row, ok := l.model.Row(e.Window); ok {
 				l.order.Promote(row)
@@ -179,7 +179,7 @@ func (l *Loop) handle(e Event) bool {
 //
 // The subtlety is that this runs on every notification and must not disturb MRU order. Upsert is
 // passed a zero FocusSeq, which it reads as "preserve what you have", so a window whose title changed
-// keeps its position — that is ALTTAB-LESSONS section 3's rule expressed as an argument value.
+// keeps its position — that is PLATFORM-LESSONS section 3's rule expressed as an argument value.
 //
 // The order is rebuilt every pass now, because the filter's *inputs* change without the window set
 // changing — a window minimizes, the current Space flips — and the order must follow. That is not a

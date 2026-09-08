@@ -22,7 +22,8 @@ Callbacks enqueue and return; no logic in a callback body. This is the origin of
 ## D2 · Go cannot build below macOS 11 — 2026-09-06
 
 Built with `CGO_CFLAGS=-mmacosx-version-min=10.14`. The Go linker overrode it: `otool -l` reports
-`minos 11.0`. AltTab ships `MACOSX_DEPLOYMENT_TARGET = 10.14.4`.
+`minos 11.0`. Native Swift switchers ship `MACOSX_DEPLOYMENT_TARGET` as low as `10.14.4`; the Go
+toolchain will not.
 
 **Consequence:** macOS 10.14/10.15 are out of scope, permanently. Recorded as accepted at project start
 (the "clean break" decision), not as a regression to fix.
@@ -35,8 +36,8 @@ compile error, not a deprecation warning. Discovered when the spike failed to bu
 **Consequence:** thumbnail capture must use ScreenCaptureKit, which is asynchronous and block-based.
 From Go that means ObjC block trampolines and C→Go callbacks (D1), which is materially harder than a
 synchronous call. **P2.6 is the highest-risk task in Phase 2** and should be prototyped before Phase 2
-is planned in detail. AltTab links it weakly (`-weak_framework ScreenCaptureKit`) precisely because of
-version skew; expect to do the same.
+is planned in detail. Switchers that target an older floor link it weakly
+(`-weak_framework ScreenCaptureKit`) precisely because of version skew; expect to do the same.
 
 ## D4 · We cannot yet measure CoreGraphics memory — P0.4 UNRESOLVED — 2026-09-06
 
@@ -69,7 +70,7 @@ blind here. P0.4 is split:
 - **P0.4b** only then re-run the hold/release gate against real ScreenCaptureKit output
 
 Until P0.4a reports a number that matches the arithmetic, **no memory claim about this project is
-credible** — including any claim that it beats AltTab.
+credible** — including any claim that it beats a comparable switcher.
 
 ## D5 · Window enumeration: 57 ms cold, 0.30 ms warm — 2026-09-06
 
@@ -85,8 +86,8 @@ during startup or the very first ⌥⇥ of a session blows the budget.
 Recorded because the reasoning came out of a conversation and would otherwise be lost. These are settled
 decisions, not open questions.
 
-**Goals, in priority order:** (1) lower memory than AltTab, (2) learn Go properly. Feature parity is a
-means, not the goal.
+**Goals, in priority order:** (1) lower memory than a comparable native switcher, (2) learn Go
+properly. Feature parity is a means, not the goal. (Goal (1) was later dropped — see D10.)
 
 **Scope decisions and what they bought:**
 
@@ -98,28 +99,30 @@ means, not the goal.
 
 **Rejected, with reasons, so they are not relitigated:**
 
-- *Go core + Swift UI shell* — the pure kernels are the 14% of AltTab that does no IPC, so they are
-  precisely the code with the least to gain from a port. The 86% that would benefit is the part Go cannot
-  express.
+- *Go core + Swift UI shell* — the pure kernels are the ~14% of a full switcher that does no IPC, so
+  they are precisely the code with the least to gain from a port. The ~86% that would benefit is the
+  part Go cannot express.
 - *Preserving macOS 10.14 support* — impossible, see D2.
-- *Preserving Pro licensing* — dropped with the clean break. Note for any future reversal: AltTab
-  `Keychain.swift:42` documents that a same-bundle-id build with a **different code signature** cannot read
-  the item but *can* silently overwrite it. Same Developer ID cert + TeamID + bundle ID is the whole
-  requirement, and it is all-or-nothing.
+- *Preserving Pro licensing* — dropped with the clean break. Note for any future reversal: a
+  same-bundle-id build with a **different code signature** cannot read a Keychain item but *can*
+  silently overwrite it. Same Developer ID cert + TeamID + bundle ID is the whole requirement, and it
+  is all-or-nothing.
 
-**An honest caveat on goal (1):** AltTab actual memory footprint was never measured — it was not running
-during the analysis session. So "lower memory than AltTab" currently has **no baseline**. See P0.7. Until
-both P0.4a (an instrument that works) and P0.7 (a number to beat) exist, the primary goal is unfalsifiable.
+**An honest caveat on goal (1):** no comparable switcher's actual memory footprint was ever measured
+— none was running during the analysis session. So "lower memory than a comparable switcher" then had
+**no baseline**. See P0.7. Until both P0.4a (an instrument that works) and P0.7 (a number to beat)
+existed, the primary goal was unfalsifiable — and it was dropped in D10 before either was pinned down.
 
 ## D7 · Prior art is captured, not inherited — 2026-09-06
 
-`docs/ALTTAB-LESSONS.md` distils AltTab hard-won platform knowledge: the two-plane architecture, the rule
-that only an attention decision or structural repair may move MRU, the 60 ms settle, the macOS traps
-(synchronous XPC inside AppKit, TCC responsible-process rule, the capture drain, the signal-mask hazard),
-and the observability ceilings that cannot be engineered around.
+`docs/PLATFORM-LESSONS.md` distils hard-won macOS window-switcher platform knowledge: the two-plane
+architecture, the rule that only an attention decision or structural repair may move MRU, the 60 ms
+settle, the macOS traps (synchronous XPC inside AppKit, TCC responsible-process rule, the capture
+drain, the signal-mask hazard), and the observability ceilings that cannot be engineered around.
 
 Read it before designing any subsystem. It is the cheapest way to avoid re-deriving several years of
-reverse-engineering, and it names its sources so each claim can be verified against the AltTab tree.
+reverse-engineering. Every entry is a platform fact, presented on its own terms — nothing in this
+project depends on any other codebase.
 
 ## D8 · P0.4a RESOLVED — the instrument is `vmmap`, and D4 was wrong — 2026-09-06
 
@@ -162,35 +165,36 @@ faults the pages back in, so measure before touching, and say which you did.
 
 Direct consequence of D8, and it deserves its own entry because it bears on why this project exists.
 
-**macOS already evicts idle thumbnail pages.** AltTab retains one `CALayerContents` per window
-indefinitely (`Window.swift:40`), and GoTab planned to beat that with a bounded LRU. But the OS is
-already doing a form of that eviction for free: an untouched 366 MB of CG raster data sat at ~6 MB
-resident without any policy from us.
+**macOS already evicts idle thumbnail pages.** A common design retains one `CALayerContents` per
+window indefinitely, and GoTab planned to beat that with a bounded LRU. But the OS is already doing a
+form of that eviction for free: an untouched 366 MB of CG raster data sat at ~6 MB resident without
+any policy from us.
 
 So a bounded LRU would reduce *virtual* size and *peak* footprint, but the steady-state resident win over
 "retain everything and let macOS reclaim" may be small. It is still worth doing — peak footprint is real,
 eviction under pressure has a latency cost when pages fault back in during a summon, and unbounded growth
 is a genuine risk with many windows — but **the size of the win is now an open question, not a given.**
 
-**This raises the stakes on P0.7.** Until AltTab's real footprint is measured with D8's instrument, we do
-not know whether the headline goal has meaningful room in it. Do P0.7 before designing the cache.
+**This raises the stakes on P0.7.** Until a comparable switcher's real footprint is measured with D8's
+instrument, we do not know whether the headline goal has meaningful room in it. Do P0.7 before designing the cache.
 
-## D10 · Memory parity with AltTab is no longer a goal — 2026-09-06
+## D10 · Memory parity with another switcher is no longer a goal — 2026-09-06
 
-**Decision (owner's call).** The project's goal is feature parity with AltTab's core switching, written
-in Go. Using less memory than AltTab is dropped as an objective. D6's framing — "the reason this project
-exists is lower memory" — is superseded; it is left in place because this file is append-only.
+**Decision (owner's call).** The project's goal is feature parity with the core switching a keyboard
+window switcher is expected to do, written in Go. Using less memory than a comparable switcher is
+dropped as an objective. D6's framing — "the reason this project exists is lower memory" — is
+superseded; it is left in place because this file is append-only.
 
 **Consequences**, all applied in the same commit:
 
 - P0.7 dropped. Phase 0 is now de-risking (panel, hotkey, ScreenCaptureKit), not a go/no-go.
-- The gate criterion "steady-state RSS, 50 windows < AltTab's" is removed. It was also unmeasurable as
-  written — see the numbers below.
+- The gate criterion "steady-state RSS, 50 windows below a comparable switcher's" is removed. It was
+  also unmeasurable as written — see the numbers below.
 - `ARCHITECTURE.md`'s memory rule stays, reframed as **correctness**: a leaked bitmap is a bug whatever
   the goal is. The cache bound is justified by peak footprint and summon-time fault-in latency (D9).
 
-**What P0.7 measured before it was dropped.** AltTab 11.6.0, 19 windows, macOS 26.6.2, measured with
-`spike/procmem` (D8's instrument applied to another pid). Two runs:
+**What P0.7 measured before it was dropped.** A reference switcher (v11.6.0), 19 windows, macOS
+26.6.2, measured with `spike/procmem` (D8's instrument applied to another pid). Two runs:
 
 | | run 1 (pid 30462) | run 2 (pid 31918, clean process) |
 |---|---|---|
@@ -200,10 +204,11 @@ exists is lower memory" — is superseded; it is left in place because this file
 | TOTAL dirty, active -> idle | 73.3 -> 9.9 MB | max 12.5 MB |
 | `Physical footprint (peak)` | 281.3 -> 305.3 MB | 36.6 -> **70.5 MB** |
 
-Run 1's peak is **not usable**: it includes AltTab's first-run onboarding and the permission-grant flow,
-which happened before sampling started. Run 2 restarted AltTab so its peak starts clean at 36.6 MB, and
-~10 summons took it to 70.5 MB. **Treat 70.5 MB peak / ~24 MB of retained thumbnails as the only
-defensible figures**, and note the two runs disagree on retained thumbnail volume (114.3 vs 23.7 MB
+Run 1's peak is **not usable**: it includes that switcher's first-run onboarding and the
+permission-grant flow, which happened before sampling started. Run 2 restarted it so its peak starts
+clean at 36.6 MB, and ~10 summons took it to 70.5 MB. **Treat 70.5 MB peak / ~24 MB of retained
+thumbnails as the only defensible figures**, and note the two runs disagree on retained thumbnail
+volume (114.3 vs 23.7 MB
 virtual) by a factor of five, unexplained — run 1 had a longer and messier process history. The
 measurement was stopped when the goal changed, so that discrepancy was never chased.
 
@@ -324,8 +329,9 @@ cheapest. `NSApplicationLoad()` also works but pulls in AppKit and a main-thread
 path otherwise does not have. This will bite again in P0.1/P0.2 and anywhere else a Go binary touches
 CoreGraphics before AppKit is up.
 
-**Weak-linking SCK needs an environment variable.** P0.6's task notes said to weak-link the framework as
-AltTab does, so the binary still loads where ScreenCaptureKit is absent — Go forces `minos 11.0` (D1) and
+**Weak-linking SCK needs an environment variable.** P0.6's task notes said to weak-link the framework the
+way any switcher targeting an older floor does, so the binary still loads where ScreenCaptureKit is
+absent — Go forces `minos 11.0` (D1) and
 SCK arrives in 12.3, so this is a real gap and not a formality. cgo rejects it: both
 `-weak_framework ScreenCaptureKit` and `-Wl,-weak_framework,ScreenCaptureKit` fail the LDFLAGS allowlist
 with `invalid flag in #cgo LDFLAGS`. It does work with `CGO_LDFLAGS_ALLOW='-Wl,-weak_framework.*'` in the
@@ -353,7 +359,7 @@ drawing** — which is a good place to be, because data is the part we control.
 
 **"The call returned" is not "the frame is on screen", and the gap is the whole cold cost.** On the
 first summon `orderFrontRegardless` returns in ~1 ms while the frame does not commit for another ~13 ms.
-ALTTAB-LESSONS section 5 predicted this — CoreAnimation commits at the end of the runloop turn — and it
+PLATFORM-LESSONS section 5 predicted this — CoreAnimation commits at the end of the runloop turn — and it
 is why the spike reports three timestamps instead of one. Anything that measured the call returning
 would have reported 1 ms cold and been wrong by an order of magnitude.
 
@@ -384,7 +390,7 @@ you are switching away from is broken, and this is the combination that avoids i
 fullScreenAuxiliary | Stationary`, which is what should make the panel follow the user across Spaces and
 appear *over* a full-screen app rather than behind it. Neither was actually tested — entering full-screen
 and switching Spaces cannot be driven synthetically here (TCC blocks synthetic keystrokes, the same wall
-P0.7 hit). **The settings are prior art from AltTab, not a measurement**, and they are recorded as such.
+P0.7 hit). **The settings are prior art, not a measurement**, and they are recorded as such.
 This is the one open question P0.1 leaves behind, and full-screen is where switchers most often fail.
 
 ---
@@ -629,8 +635,8 @@ works on this machine today and shows nothing on a machine without a TCC grant i
 coincidence.
 
 **Consequence: P2.3 is load-bearing, not an enhancement.** Accessibility's `kAXWindowsAttribute` per
-application is what actually enumerates switchable windows, which is why AltTab is built on AX and uses
-`CGWindowList` only for identity and geometry. The roadmap had P2.3 as "AX observer registration;
+application is what actually enumerates switchable windows, which is why a switcher is built on AX and
+uses `CGWindowList` only for identity and geometry. The roadmap had P2.3 as "AX observer registration;
 callbacks enqueue only" — observation. It also owns *enumeration*, and P2.2's output is the candidate
 set it filters, not the window list.
 
@@ -771,7 +777,7 @@ so their callers check.
 
 **Re-enumeration must not disturb MRU order, and that turned out to be an argument value.** `doRescan`
 touches every window on every pass. It upserts with a **zero `FocusSeq`**, which `Model.Upsert` reads as
-"preserve what you have" — so a window whose title changed keeps its position. ALTTAB-LESSONS §3's rule
+"preserve what you have" — so a window whose title changed keeps its position. PLATFORM-LESSONS §3's rule
 that a title change may not reorder is enforced by passing zero, not by a branch. The order is rebuilt
 only when membership actually changed, because a rebuild *is* a reorder.
 
@@ -1039,8 +1045,9 @@ subtitle (11 pt) tail-truncated, and a framed sun/mountain **placeholder** for a
 is not captured yet (D12: that is a launch state, not a refinement). Style mask and the
 `collectionBehavior` triple are `spike/panel`'s, verified there (D13).
 
-- **Thumbnails are dumb `CALayer` sublayers**, one per tile, that never call back into Go — AltTab
-  has 53 NSView subclasses and a C→Go hop per tile; this has zero. `gt_panel_tile_layer(i)` hands
+- **Thumbnails are dumb `CALayer` sublayers**, one per tile, that never call back into Go — the
+  conventional design has dozens of NSView subclasses and a C→Go hop per tile; this has zero.
+  `gt_panel_tile_layer(i)` hands
   P3.3 a layer positioned over the tile's **thumbnail sub-rect** (inset 8 pt, minus a 34 pt label
   band), so an opaque `CGImage` on `contents` cannot cover the title. The split constants
   (`kTilePad`, `kLabelStrip`) live in `panel.m` and are the P3.1↔P3.2/P3.3 coordination point.
@@ -1178,7 +1185,7 @@ V6.1 will measure.
   ⌥+Tab of a hold and cleared on commit/dismiss; the first Tab emits `SUMMON_*`, later ones
   `CYCLE_*`, and Option-release emits `ACTIVATE` only if armed. So `cmd/gotab`'s `postGesture` is a
   stateless `switch` — `SUMMON_FWD` becomes `Summon` + `Cycle(Forward)`, so a single ⌥⇥ tap lands on
-  the *next* window (the AltTab behaviour).
+  the *next* window (the expected switcher behaviour).
 - **What is swallowed:** ⌥+Tab keydown and — while armed — its keyup (so the app underneath gets no
   orphan keyup), and Esc while armed. A `kCGEventFlagsChanged` is never swallowed (other apps track
   Option state). Autorepeat on a held Tab (`kCGKeyboardEventAutorepeat`) is dropped — ~15×/s is too
@@ -1212,7 +1219,7 @@ same key. `internal/platform/darwin.Prefs` implements `Reader`/`Writer` over
   schema — verified: `MaxColumns = 3`, `HotkeyModifiers = 524288`, `BlockedApps = ()` after
   `gotab -prefs MaxColumns=3`. Under `go run` / a bare `go build` binary it is that binary's own name
   (`~/Library/Preferences/<name>.plist`), so a dev build writes a throwaway domain and cannot corrupt
-  the real prefs. This is the same responsible-process identity rule TCC uses (ALTTAB-LESSONS §5), and
+  the real prefs. This is the same responsible-process identity rule TCC uses (PLATFORM-LESSONS §5), and
   it is the honest behaviour, not a limitation to fix.
 - **`Save` writes the whole record, not a diff.** A field at its default is still persisted, so a
   later change to `Default()` cannot silently move a user's setting.
@@ -1386,9 +1393,10 @@ Why not Sparkle:
   story only holds with a Developer ID signature + notarization — a `spctl`-rejected ad-hoc app that
   replaces itself is not something to ship. Until notarization exists (V6.7's machine half), Sparkle
   would be infrastructure with nothing to stand on.
-- **Clean break.** The project inherits nothing from AltTab — no Keychain, no preference migration,
-  no Sparkle continuity (D6, ARCHITECTURE.md). AltTab vendors Sparkle, AppCenter and ShortcutRecorder
-  (ALTTAB-LESSONS.md); GoTab vendors nothing and this keeps it that way.
+- **Clean break.** The project inherits nothing from any existing switcher — no Keychain, no
+  preference migration, no Sparkle continuity (D6, ARCHITECTURE.md). Mature Swift switchers vendor
+  Sparkle, a crash reporter and a shortcut recorder (PLATFORM-LESSONS.md); GoTab vendors nothing and
+  this keeps it that way.
 - **cgo cost and surface.** Sparkle is an Objective-C framework — another weak link, another
   `SUPublicEDKey` in the plist, an EdDSA signing step in `build.sh`, an appcast host. A `net/http`
   GET and a 30-line semver compare is the whole of the alternative.
@@ -1459,3 +1467,100 @@ there is no per-tile `NSView` for AppKit to expose. The shape that fell out:
 wall P3.1's screenshot (V6.2/V6.3) and V6.1's keypress hit. A human runs VoiceOver against
 `gotab -switch` and `gotab -settings` and confirms each tile is announced with title + app, the
 selection is spoken on every ⌥⇥ cycle, and every settings control has a spoken label.
+
+---
+
+## D42 · CI/CD: releases are cut by a tag, and the update feed is GitHub Pages — 2026-09-08
+
+P5.3 left `FeedURL` pointing at `https://gotab.app/appcast/latest.json`, a host that never existed
+(D39), and there was no release process at all. Both are now GitHub infrastructure, so nothing new
+has to be paid for or operated.
+
+- **A `v*` tag is the entire trigger.** `git tag -a v0.2.0 -m "…" && git push origin v0.2.0` starts
+  `.github/workflows/release.yml`: run the gate, `build.sh`, `ditto`-zip the `.app`, `gh release
+  create` with the zip + its SHA-256, render `latest.json`, deploy Pages. No "create the release in
+  the UI first" step — the tag is the input and the commit it points at is the provenance.
+- **One build path, not two.** The workflow calls the same `scripts/build.sh` a developer runs;
+  there is no CI-only build. Its one concession is `SHORT_VERSION="${GOTAB_SHORT_VERSION:-0.1.0}"`,
+  so the tag drives `CFBundleShortVersionString` while `git describe --tags` (now reachable —
+  `fetch-depth: 0` on checkout) drives `CFBundleVersion` and `-X main.version`. `parseVersion`
+  already strips the leading `v`.
+- **The manifest is rendered from the checked-in template.** `resources/appcast/latest.json` stops
+  being a stale example and becomes the file the workflow reads: `jq` overrides `version` / `url` /
+  `notes` (the last from the annotated tag's subject line) and leaves `min_macos` — the single
+  source of truth for the manifest's OS floor stays in the repo, next to `build.sh`'s `MIN_MACOS`.
+- **Pages via `actions/deploy-pages`, no `gh-pages` branch.** Source = "GitHub Actions"; the
+  `release` job uploads a `_site/` artifact (the manifest plus a one-line `index.html` so the root
+  isn't a 404) and a separate `deploy-pages` job publishes it. Separate on purpose: a first tag
+  pushed before the repo is public — or before the Pages source is switched — still produces a
+  usable Release, and only the Pages step needs re-running.
+- **`FeedURL` → `https://moustafa-elgammal.github.io/gotab/latest.json`.** Inert until the repo is
+  public and Pages is enabled, which is the same "placeholder until a host exists" status D39
+  recorded — only now the host is concrete and V6.11 has something real to run against.
+- **First-party actions only.** `actions/checkout`, `actions/setup-go`, `actions/upload-pages-artifact`,
+  `actions/deploy-pages`, and the preinstalled `gh` CLI. No `softprops/action-gh-release`, no
+  `peaceiris/actions-gh-pages` — the project vendors nothing (D39, ARCHITECTURE.md) and that applies
+  to the pipeline too.
+
+**Still out of scope, and still gated on an Apple Developer account:** notarization / Developer ID
+signing, and in-app download + verify + relaunch. The attached zip is ad-hoc signed (D38), so a
+downloader on another machine needs a right-click → Open. A notarization step in the workflow is the
+fix and is a separate future task, not a V6 row. `BUNDLE_ID` stays `app.gotab` — renaming it now
+orphans the CFPreferences domain and the TCC grants (D34).
+
+**assumption → V6.12 / V6.11:** the pipeline has not run — the repo is private, Pages is off, and
+there are no tags. V6.12 is the row for "it runs once, end to end"; V6.11 then becomes runnable.
+
+---
+
+## D43 · the app icon: a portrait source, a padded square master, `.icns` built by `sips` — 2026-09-08
+
+The art was delivered as `resources/assets/ico.png` — the GoTab gopher, 496×664, portrait, with its
+own white sticker outline and a transparent field. macOS icons are square (16…1024). Cropping the
+gopher or squashing it to fit were both rejected; instead it is centred on a 1024×1024 transparent
+canvas at 92% of the tile, and *that* — `resources/assets/icon-1024.png` — is the master the build
+consumes. The portrait `ico.png` stays in the tree as the human-editable original.
+
+- **Derived, not vendored.** `scripts/build.sh` renders ten exact-size PNGs with `sips` and packs
+  them into `Contents/Resources/AppIcon.icns` with `iconutil`, at build time. Same shape as the
+  rendered `latest.json` (D42): one committed source, the packaged form is a build artifact, never
+  committed. `sips` and `iconutil` are base-system — the same dependency tier as the script's
+  existing `lipo` / `otool` / `plutil` / `codesign`, so no new toolchain.
+- **The square master *is* committed** rather than derived at build. Padding a portrait image onto a
+  transparent square needs a real compositor, not `sips`; doing it once (a short Swift/CoreGraphics
+  snippet, kept in `resources/assets/README.md`) keeps every build on `sips` + `iconutil` alone.
+- **`CFBundleIconFile` is `AppIcon`**, extensionless by convention. A missing master is not fatal:
+  `build.sh` warns and skips, the same stance as an absent locale tree (D40) — the app still
+  launches, just with the generic bundle icon.
+- **16 and 32 px are weak.** The source is a detailed illustration; at list-icon sizes the
+  window-switcher badge on the gopher's belly turns to mud. A simplified small-size glyph is a
+  separate hand-drawn asset and is not done here.
+- The app is `LSUIElement` (D34, P4.2) so there is no Dock tile, but Finder, the Login Items list,
+  and the TCC / permissions prompts all render the bundle icon — it earns its place.
+
+---
+
+## D44 · the `panelRenderer.onState` per-state-change allocation is accepted, not removed — 2026-09-08
+
+V6.8's job was to re-check the 0-alloc hot path now that Phases 2–5 wire real data through it, and to
+settle the `assumption` the roadmap tagged at Phase 3: `cmd/gotab`'s `panelRenderer.onState` builds
+two fresh slices — `make([]darwin.Tile, n)` and `make([]darwin.ThumbRequest, n)` — on every state
+change.
+
+- **The `core` hot path is still clean.** Every `internal/core` benchmark reports `0 allocs/op`, and
+  a new composite `internal/app` benchmark (`BenchmarkHandleGesture`: `Summon` → `Cycle` → `Cycle` →
+  `Dismiss` against 20 real windows) is `19.8 ns/op, 0 B/op, 0 allocs/op`. Filtering and rebuilding
+  the order every rescan (P4.4 / D37) did not cost the hot path an allocation.
+- **The bridge allocation is measured: 2 allocs, `n × 112` bytes — 784 B at 7 windows, 2240 B at
+  20.** (`unsafe.Sizeof`: `Tile` 80 B, `ThumbRequest` 32 B.) Once per gesture — a summon, or one
+  cycle keystroke — not once per frame and not per prefetched thumbnail.
+- **Accepted.** The slices are fresh each call for a real reason: they are handed to an async
+  `darwin.OnMain` closure and to `pf.Want`, and the loop goroutine would otherwise overwrite a
+  reused backing array before the main thread read it. Removing the allocation needs a `sync.Pool`
+  (closure returns the buffer) or an N-deep ring — lifecycle complexity that does not pay for itself
+  against 2 KB on a keystroke that already crosses into AppKit and sits behind the ~46 ms capture and
+  ~1.3 ms draw the summon budget is actually spent on (D12, D13). ARCHITECTURE.md's 0-alloc rule is
+  about `core`'s kernels; this is the bridge above them.
+- **The escape hatch, on record:** if a CPU profile of a real session ever shows this mattering, lift
+  the tile/request build into a `panelRenderer` method with a pooled buffer. Not done now because
+  nothing measures it as a problem.

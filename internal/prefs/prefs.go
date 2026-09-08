@@ -23,10 +23,11 @@ const (
 const modifierAlternate = 0x00080000
 
 // Prefs is the whole settings surface. See doc.go: keys are the field names, the zero value is not
-// used, and some fields are schema-only until a later Phase 4 task wires them.
+// used. Every field is wired end to end (P4.2, P4.4) except ActiveAppOnly — noted below.
 type Prefs struct {
-	// Filter — core.Rules. NOT consumed by the event loop yet (it shows every window); carried so the
-	// schema is complete. Wiring the filter is a later task (docs/tasks/P4.1.md).
+	// Filter — core.Rules. Consumed by the event loop: Loop.Rules runs the model through core.Filter
+	// on every rescan (P4.4, D37). Exception: ActiveAppOnly is still inert — it needs the frontmost
+	// pid captured on Summon, which the loop does not do yet.
 	ShowMinimized  bool
 	ShowHidden     bool
 	ShowOtherSpace bool
@@ -45,8 +46,9 @@ type Prefs struct {
 	ThumbnailCacheSize int
 
 	// Hotkey — the chord that summons the switcher. HotkeyKeyCode is a hardware keycode (48 is Tab),
-	// HotkeyModifiers a CGEventFlags mask. Schema-only for now: the tap's keycode is still fixed
-	// (docs/tasks/P4.1.md). Shift always means "backwards" regardless of the base chord.
+	// HotkeyModifiers a CGEventFlags mask. Live end to end (P4.2, D35): gt_hotkey_start takes the
+	// chord and the settings recorder writes it. Shift always means "backwards" regardless of the
+	// base chord.
 	HotkeyKeyCode   int
 	HotkeyModifiers int
 }
@@ -248,7 +250,8 @@ func (p Prefs) LayoutOpts() core.LayoutOpts {
 }
 
 // Rules fills the pref-derived fields of a core.Rules. The caller sets ActiveApp and CurrentSpace from
-// the live state. NOTE: the event loop does not consult Rules yet — see doc.go.
+// the live state. The event loop runs this through core.Filter every rescan (P4.4, D37); ActiveAppOnly
+// is the one field still inert — see the Prefs struct.
 func (p Prefs) Rules() core.Rules {
 	return core.Rules{
 		ShowMinimized:  p.ShowMinimized,

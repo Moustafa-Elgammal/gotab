@@ -1,7 +1,7 @@
 # GoTab
 
-A macOS window switcher written in Go. Clean-slate rewrite of [AltTab](https://alt-tab.app/) — new bundle
-ID, nothing inherited from an existing install.
+A macOS window switcher written in Go. Built from scratch — its own bundle ID, nothing inherited
+from any existing install.
 
 **Status: Phase 0 (proof).** Not usable yet. The design is being validated before the app is built; see
 [docs/ROADMAP.md](docs/ROADMAP.md) for exactly where it stands.
@@ -27,6 +27,35 @@ re-run — it upgrades in place.
 ./scripts/wt.sh new P1.3   # worktree for parallel agent work
 ```
 
+## Releases
+
+Pushing a `v*` tag is the whole release process — `.github/workflows/release.yml` runs the gate,
+builds the universal `.app`, and cuts a [GitHub Release](https://github.com/Moustafa-Elgammal/gotab/releases)
+with the zipped bundle and its SHA-256:
+
+```bash
+git tag -a v0.2.0 -m "Multi-monitor fixes and a faster first summon."
+git push origin v0.2.0
+```
+
+The same workflow publishes `latest.json` to GitHub Pages
+(`https://moustafa-elgammal.github.io/gotab/latest.json`), which is where `gotab -check-update` looks
+to tell you a newer build is out. The bundle is ad-hoc signed, so a copy downloaded to another Mac
+needs a right-click → Open the first time (notarization is future work). See
+[docs/DECISIONS.md](docs/DECISIONS.md) D42.
+
+## License
+
+GoTab is free software: you can redistribute it and/or modify it under the terms of the **GNU General
+Public License, version 3 or (at your option) any later version**, as published by the Free Software
+Foundation. The full text is in [LICENSE](LICENSE).
+
+GoTab is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without even the
+implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public
+License for more details.
+
+Copyright (C) 2026 Moustafa Elgammal
+
 ## Documentation
 
 Read in this order:
@@ -36,7 +65,7 @@ Read in this order:
 | [AGENTS.md](AGENTS.md) | the working agreement: commands, Go style, workflow. `CLAUDE.md` includes it. |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | the invariants. Read before touching code. |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | every task and its state. The source of truth for "what's done". |
-| [docs/ALTTAB-LESSONS.md](docs/ALTTAB-LESSONS.md) | prior art: AltTab platform knowledge and the traps it hit. |
+| [docs/PLATFORM-LESSONS.md](docs/PLATFORM-LESSONS.md) | prior art: macOS window-switcher platform knowledge and the traps to avoid. |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | what was measured and what it forced. Append-only. |
 | [docs/PARALLEL-WORK.md](docs/PARALLEL-WORK.md) | how to parallelise this without wasting tokens. |
 

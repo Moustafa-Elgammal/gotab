@@ -29,7 +29,7 @@ enum {
 gt_status gt_init(void);
 
 // TCC state. Both are about the RESPONSIBLE process, which under `go run` is the terminal and not
-// this binary (docs/ALTTAB-LESSONS.md section 5). Neither prompts the user.
+// this binary (docs/PLATFORM-LESSONS.md section 5). Neither prompts the user.
 int32_t gt_trusted(void);     // Accessibility
 int32_t gt_can_record(void);  // Screen Recording
 

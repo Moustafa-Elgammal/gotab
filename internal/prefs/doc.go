@@ -14,7 +14,8 @@
 //     Prefs from a core type. Runtime-only fields those core types carry (Screen, Scale, CurrentSpace)
 //     are the caller's to fill after.
 //
-// Not every field is consumed yet: the Rules() fields and the hotkey chord are in the schema so it is
-// defined once and P4.2's settings UI has all of it, but the event loop does not filter by Rules and
-// the hotkey keycode is still fixed. Those wirings belong to later Phase 4 tasks; see docs/tasks/P4.1.md.
+// Every field is wired end to end: P4.2 (D35) made the hotkey chord live from the settings recorder
+// through to the tap, and P4.4 (D37) put the Rules() fields through core.Filter on every rescan. The
+// one exception is Rules().ActiveAppOnly, still inert because the loop does not capture the frontmost
+// pid on Summon yet.
 package prefs

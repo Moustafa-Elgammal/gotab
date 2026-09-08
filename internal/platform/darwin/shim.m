@@ -178,8 +178,9 @@ gt_status gt_window_list(gt_window *buf, int32_t cap, int32_t *out_n, int32_t *o
 //
 // The window model is keyed by CGWindowID (core.WindowID, frozen in P1.0) because that is what
 // CGWindowList, ScreenCaptureKit and the WindowServer all speak. Accessibility does not expose that
-// number through any public call. Every serious macOS window manager -- AltTab, Hammerspoon, yabai --
-// uses this symbol for the same reason, which is what makes it safe in practice rather than in theory.
+// number through any public call. Every serious macOS window manager -- Hammerspoon, yabai, and
+// others -- uses this symbol for the same reason, which is what makes it safe in practice rather than
+// in theory.
 //
 // It has been present and unchanged since 10.x. If it ever disappears the fallback is matching AX
 // windows to CGWindowList entries by pid plus frame, which is ambiguous for two identically sized

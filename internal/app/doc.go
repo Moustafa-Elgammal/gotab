@@ -9,7 +9,7 @@
 // seen, do nothing but Post, and return immediately — an Accessibility callback or an event tap that
 // stalls is disabled by the system, so posting must never block, and Post is built so it cannot.
 //
-// What may reorder the list is the constraint that shapes the rest (docs/ALTTAB-LESSONS.md §3): an
+// What may reorder the list is the constraint that shapes the rest (docs/PLATFORM-LESSONS.md §3): an
 // attention decision (the user focused a window) or a structural repair (a window appeared or
 // vanished), and nothing else. Re-enumeration reads every window on every pass and must leave MRU
 // order exactly as it found it, which is why Rescan upserts with a zero FocusSeq and rebuilds the

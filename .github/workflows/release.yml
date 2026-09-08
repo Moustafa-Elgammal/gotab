@@ -1,0 +1,128 @@
+name: Release
+
+# A v* tag is the release trigger:
+#     git tag -a v0.2.0 -m "…" && git push origin v0.2.0
+#
+# The job runs the gate, builds the universal .app with the tag as its marketing
+# version, cuts a GitHub Release carrying the zipped bundle + its SHA-256, renders
+# latest.json from resources/appcast/latest.json (the manifest template), and hands
+# it to GitHub Pages. Scope is check-only (D39): no notarization, no in-place update.
+# See docs/DECISIONS.md D42 and docs/tasks/V6.12.md.
+
+on:
+  push:
+    tags: ['v*']
+
+# Least privilege by default; each job opts in to exactly what it needs.
+permissions: {}
+
+jobs:
+  release:
+    # macOS: build.sh compiles cgo against AppKit/CoreGraphics and lipos a universal binary.
+    runs-on: macos-15
+    permissions:
+      contents: write   # gh release create
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # git describe --tags in build.sh needs the tag and its history
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26'
+          cache: true
+
+      - name: Gate (gofmt, vet, tests, architecture invariants)
+        run: ./scripts/check.sh
+
+      - name: Derive version and notes
+        id: v
+        run: |
+          tag="$GITHUB_REF_NAME"
+          short="${tag#v}"
+          # actions/checkout leaves a lightweight ref at the tag name pointing straight
+          # at the commit, which shadows the annotated tag object — %(contents:subject)
+          # then reads the *commit* subject, not the tag message (that is how v0.2.0's
+          # notes came out as the commit line). Force the local ref back to the real
+          # annotated object before reading it.
+          git fetch --force origin "refs/tags/${tag}:refs/tags/${tag}"
+          # The annotated tag's subject line becomes the manifest's one-line notes;
+          # a lightweight tag has none, so fall back to something non-empty.
+          notes="$(git tag -l --format='%(contents:subject)' "$tag")"
+          [ -n "$notes" ] || notes="GoTab $short"
+          {
+            echo "tag=$tag"
+            echo "short=$short"
+            echo "notes=$notes"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Build GoTab.app
+        env:
+          GOTAB_SHORT_VERSION: ${{ steps.v.outputs.short }}
+        run: ./scripts/build.sh
+
+      - name: Package the bundle
+        env:
+          TAG: ${{ steps.v.outputs.tag }}
+        run: |
+          # ditto, not zip: it preserves the ad-hoc signature and the xattrs codesign wrote.
+          ditto -c -k --keepParent build/GoTab.app "GoTab-$TAG.zip"
+          shasum -a 256 "GoTab-$TAG.zip" | tee "GoTab-$TAG.zip.sha256"
+
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.v.outputs.tag }}
+          NOTES: ${{ steps.v.outputs.notes }}
+        run: |
+          gh release create "$TAG" \
+            "GoTab-$TAG.zip" "GoTab-$TAG.zip.sha256" \
+            --title "$TAG" --notes "$NOTES" --verify-tag
+
+      - name: Render the update manifest
+        env:
+          SHORT: ${{ steps.v.outputs.short }}
+          TAG: ${{ steps.v.outputs.tag }}
+          NOTES: ${{ steps.v.outputs.notes }}
+        run: |
+          mkdir -p _site
+          # min_macos and the JSON shape come from the checked-in template; the release
+          # overrides only version / url / notes. jq handles the escaping.
+          jq --arg v "$SHORT" \
+             --arg u "https://github.com/Moustafa-Elgammal/gotab/releases/tag/$TAG" \
+             --arg n "$NOTES" \
+             '.version = $v | .url = $u | .notes = $n' \
+             resources/appcast/latest.json > _site/latest.json
+          cat > _site/index.html <<'HTML'
+          <!doctype html>
+          <meta charset="utf-8">
+          <title>GoTab</title>
+          <p>GoTab's release feed. See
+          <a href="https://github.com/Moustafa-Elgammal/gotab">the repository</a>
+          and <a href="latest.json">latest.json</a>.
+          HTML
+          echo "--- _site/latest.json ---"
+          cat _site/latest.json
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  # Separate job so the Release above is fully cut even when this fails — which it
+  # does until the repo is public and Pages' source is set to "GitHub Actions"
+  # (Settings → Pages → Build and deployment). That failure is the signal to flip it.
+  deploy-pages:
+    needs: release
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    concurrency:
+      group: pages
+      cancel-in-progress: false
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4

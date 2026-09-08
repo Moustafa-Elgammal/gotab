@@ -1,9 +1,9 @@
 // The project's general memory instrument: apply D8's method to a process we did not write.
 //
-// spike/memprobe measures itself — task_info on its own task, vmmap against os.Getpid(). That was
-// useless for AltTab, which is why this exists; P0.7 has since been dropped (D10) but the instrument
-// outlived it and is now what P0.4b and every later memory claim are measured with. It reads four
-// quantities out of `vmmap --summary <pid>` for any pid:
+// spike/memprobe measures itself — task_info on its own task, vmmap against os.Getpid(). That cannot
+// measure a process we did not write, which is why this exists; P0.7 has since been dropped (D10) but
+// the instrument outlived it and is now what P0.4b and every later memory claim are measured with. It
+// reads four quantities out of `vmmap --summary <pid>` for any pid:
 //
 //	CG raster data            CGImage backing store — bitmaps CoreGraphics allocated itself
 //	IOSurface                 GPU-shared surfaces — where ScreenCaptureKit output actually lands
@@ -18,18 +18,18 @@
 //
 // D8's order-sensitivity warning applies with a twist. In-process we could fault pages back in by
 // reading them; here we cannot touch another process's pixels, so RESIDENT is a *lower bound* that
-// depends on how recently AltTab drew. VIRTUAL and peak are the stable numbers. Sample over time
+// depends on how recently the target drew. VIRTUAL and peak are the stable numbers. Sample over time
 // and summon the switcher while it runs — that is what -n and -every are for.
 //
-// A note earned the hard way: AltTab quits and relaunches itself when permissions are granted, so a
-// pid captured once goes stale and every later sample fails. With -name the pid is re-resolved every
+// A note earned the hard way: some apps quit and relaunch themselves when permissions are granted, so
+// a pid captured once goes stale and every later sample fails. With -name the pid is re-resolved every
 // sample and a restart is reported rather than fatal. Transient vmmap failures never end the run —
 // a measurement session is minutes of a human pressing keys, and losing it to one bad sample is worse
 // than a gap in the table.
 //
 // Usage:
 //
-//	go run ./spike/procmem -name AltTab -n 12 -every 5s
+//	go run ./spike/procmem -name Safari -n 12 -every 5s
 //	go run ./spike/procmem -pid 1234
 //
 // No cgo: it shells out to vmmap. That keeps it usable against any pid, including a release build
@@ -119,7 +119,7 @@ func read(pid int) (sample, error) {
 	return s, nil
 }
 
-// pidOf finds a process by executable name. pgrep -x so "AltTab" does not also match a helper
+// pidOf finds a process by executable name. pgrep -x so an exact name does not also match a helper
 // or this probe's own command line.
 func pidOf(name string) (int, error) {
 	out, err := exec.Command("pgrep", "-x", name).Output()
@@ -138,7 +138,7 @@ func pidOf(name string) (int, error) {
 }
 
 func main() {
-	name := flag.String("name", "", "process name to measure, e.g. AltTab")
+	name := flag.String("name", "", "process name to measure, e.g. Safari")
 	pid := flag.Int("pid", 0, "process id to measure (overrides -name)")
 	n := flag.Int("n", 1, "number of samples")
 	every := flag.Duration("every", 5*time.Second, "interval between samples")

@@ -10,7 +10,7 @@
 //  4. can the event be swallowed so the app underneath never gets it?
 //
 // Accessibility is granted to the RESPONSIBLE process, which for `go run` is the terminal, not this
-// binary (ALTTAB-LESSONS section 5). An ungranted tap installs fine and then never fires, so the grant
+// binary (PLATFORM-LESSONS section 5). An ungranted tap installs fine and then never fires, so the grant
 // is checked up front rather than left to look like a broken hotkey.
 package main
 

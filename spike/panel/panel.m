@@ -13,7 +13,7 @@
 //     living on the Space it was created on; fullScreenAuxiliary is what lets it appear over a
 //     full-screen app instead of behind it. A switcher that vanishes in full-screen is not a switcher.
 //   - The nested run loop in panel_cycle. AppKit only commits a frame at the end of a runloop turn
-//     (ALTTAB-LESSONS section 5), so a measurement that does not pump the loop measures nothing but
+//     (PLATFORM-LESSONS section 5), so a measurement that does not pump the loop measures nothing but
 //     the cost of asking. This is a spike; the real app runs the loop normally and never nests.
 //
 // Compiled without ARC (cgo does not pass -fobjc-arc), so retain/release here is manual.
@@ -49,8 +49,9 @@ static double ms_since(uint64_t t0) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// One view draws every tile. P3.1's design: AltTab has 53 NSView subclasses and pays a C->Go callback
-// for each; measuring an empty window here would flatter a shape we are not going to build.
+// One view draws every tile. P3.1's design: the conventional approach gives every tile its own NSView
+// and pays a C->Go callback for each; measuring an empty window here would flatter a shape we are not
+// going to build.
 @interface TileStrip : NSView
 @end
 

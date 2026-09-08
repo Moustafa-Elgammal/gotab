@@ -1,7 +1,9 @@
 # GoTab — working agreement
 
-A macOS window switcher in Go. Clean-slate rewrite of AltTab; nothing is inherited from an existing
-install. **Status: Phase 0 closed (D15), Phase 2 next. The app does not switch windows yet.**
+A macOS window switcher in Go, built from scratch; nothing is inherited from any existing install.
+**Status: Phases 0–5 complete. Phase 6 (verification) in progress — V6.6, V6.8, V6.11, V6.12 done
+(v0.2.0 and v0.2.1 shipped through the release automation); the human/machine checklist
+(V6.1–V6.5, V6.7, V6.9, V6.10) is what's left.**
 
 ## Read these first
 
@@ -10,7 +12,7 @@ install. **Status: Phase 0 closed (D15), Phase 2 next. The app does not switch w
 | `docs/ARCHITECTURE.md` | before touching any code — the invariants live there, not here |
 | `docs/ROADMAP.md` | to find out what is done and what is next. The source of truth. |
 | `docs/DECISIONS.md` | when something looks arbitrary. It records what was measured. Append-only. |
-| `docs/ALTTAB-LESSONS.md` | before designing any subsystem — prior art, platform traps, what is impossible |
+| `docs/PLATFORM-LESSONS.md` | before designing any subsystem — prior art, platform traps, what is impossible |
 | `docs/tasks/<ID>.md` | whenever you work a numbered task — the contract: files you may touch, and the acceptance test |
 | `docs/PARALLEL-WORK.md` | only when splitting work across agents or worktrees |
 
@@ -40,14 +42,14 @@ four failures rather than only the first. Green here is a precondition for mergi
 Each `spike/<name>/` is a standalone `package main`, macOS + cgo only, and every one takes flags — read
 its header comment before running it, not after. `-h` lists them.
 
-- **TCC judges the responsible process, not the binary** (`ALTTAB-LESSONS.md` §5). Under `go run`, the
+- **TCC judges the responsible process, not the binary** (`PLATFORM-LESSONS.md` §5). Under `go run`, the
   grant that matters belongs to the *terminal*. `spike/hotkey` needs Accessibility, `spike/sck` needs
   Screen Recording. Ungranted, a tap installs cleanly and then never fires — indistinguishable from a
   broken hotkey, which is why both spikes check the grant up front and say so.
 - Some results need a human at the machine: `spike/panel -hold` to look at the panel, `spike/hotkey
   -manual` to wait for a real ⌥⇥. Don't report those from an agent that cannot see the screen.
-- `spike/procmem -name AltTab` is the project's general memory instrument (D8/D12), not a one-off — use
-  it for any memory claim, and read the `IOSurface` row, not just `CG raster data`.
+- `spike/procmem -name <process>` is the project's general memory instrument (D8/D12), not a one-off —
+  use it for any memory claim, and read the `IOSurface` row, not just `CG raster data`.
 
 ## Go style
 
