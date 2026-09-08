@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"os/signal"
 	"runtime"
 	"sort"
@@ -546,6 +547,17 @@ func runSwitcher(demo bool) int {
 		}
 	}
 
+	// The menu-bar status item (P8.1). GoTab is LSUIElement — no Dock tile, no app menu — so without
+	// this a switcher installed from Finder has no visible surface: Settings and Quit are reachable
+	// only from a terminal. "Settings…" launches `gotab -settings` as its own process (the standalone
+	// entry point, which owns its window / run loop / Regular policy) so this process stays a clean
+	// Accessory; "Quit GoTab" cancels ctx, the same path as ^C.
+	darwin.OnMain(func() {
+		if err := darwin.InstallMenuBar("GoTab "+version, openSettingsProcess, func() { stop() }); err != nil {
+			fmt.Fprintf(os.Stderr, "gotab: menu bar unavailable (%v)\n", err)
+		}
+	})
+
 	// Shutdown ordering matters: drain the prefetcher and observers while the main queue is still
 	// being serviced, hide the panel, then break the run loop.
 	go func() {
@@ -554,6 +566,7 @@ func runSwitcher(demo bool) int {
 		pf.Stop()
 		darwin.StopObservers()
 		darwin.StopWatchingAppearance()
+		darwin.OnMain(darwin.RemoveMenuBar)
 		darwin.OnMain(darwin.HidePanel)
 		darwin.StopRunLoop()
 	}()
@@ -812,6 +825,27 @@ func grantWord(ok bool) string {
 		return "granted"
 	}
 	return "missing"
+}
+
+// openSettingsProcess launches `gotab -settings` as its own process. Settings is already a standalone
+// entry point that owns its window, its run loop and its (Regular) activation policy, so spawning it
+// keeps the switcher process a clean Accessory and cannot take the switcher down if it misbehaves. A
+// running `gotab -switch` re-reads its settings only on the next launch — the same as `gotab
+// -settings` from a terminal. Called on the main thread from the menu-bar action; Start does not
+// block. Errors go to stderr — a menu click that does nothing is the worst outcome.
+func openSettingsProcess() {
+	exe, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: settings: %v\n", err)
+		return
+	}
+	cmd := exec.Command(exe, "-settings")
+	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "gotab: settings: %v\n", err)
+		return
+	}
+	go cmd.Wait() // reap it when the settings window closes; no zombie
 }
 
 // runSettings is `gotab -settings`: a native window over the same CFPreferences domain the CLI and
