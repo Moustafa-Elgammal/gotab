@@ -1629,3 +1629,45 @@ rule (a new phase gets rows in that table, not its own tests — AGENTS.md).
 
 **Scratch instrument:** `spike/raisetest/` — enumerate, then `darwin.Raise` every window and print
 the result per origin. Kept through Phase 7; delete when V6.13 closes.
+
+---
+
+## D47 · Phase 7 — an un-raiseable tile still reaches its app; dead windows leave — 2026-09-08
+
+D46 found the switcher rendering tiles it could not action. Phase 7 closes that gap from both ends.
+**Code only — on-machine verification is V6.13 / V6.14, and V6.2 for P7.3.** P7.2 and P7.3 were built
+in parallel worktrees against disjoint file sets (`internal/app/loop.go` + new `process.go` vs
+`space.{h,m}` + `action.m`) and merged `--no-ff`; the combined gate is green with no cgo warnings.
+
+**P7.1 — raise falls back to the application.** When `copy_window_element` returns no element with
+`GT_ERR_NO_WINDOW` and the owning pid is a running application
+(`runningApplicationWithProcessIdentifier:` non-nil), `gt_window_raise` calls `activate_app(pid)` and
+returns `GT_OK`. The specific window is not ordered; the app comes forward, which `Loop.Activate`
+already treats as a switch. `GT_ERR_TIMEOUT` / `GT_ERR_NOT_TRUSTED` are not rerouted — a wedged app
+or a revoked grant is a different answer. A dead owner stays `ErrNoWindow`.
+
+**P7.2 — dead windows leave the model.** `doRescan`'s prune already dropped a window that fell out of
+both enumerations for a pass (the ordinary ⌘W close — confirmed against `Enumerate` in `window.go`,
+now commented). It now also drops a window still being enumerated whose owning pid has exited — a
+`cg`-only window the join recovered can outlive its app by a rescan or two on a stale CoreGraphics
+entry. `darwin.ProcessAlive(pid)` is pure Go (`syscall.Kill(pid, 0)`: `nil` / `EPERM` alive, `ESRCH`
+gone) — POSIX, not CoreGraphics, so no cgo crossing and not behind the frozen shim. One `Kill` per
+distinct pid per rescan, memoized in a per-pass map preallocated in `New` like `present` / `allowed`;
+no allocation added to the path, and the backwards swap-with-last prune keeps its invariant.
+
+**P7.3 (optional, private-API bet) — Space-aware raise.** Before P7.1's fallback, `gt_window_raise`
+calls `gt_space_switch_to_window(wid)`: if the window is on another Space, SkyLight
+(`CGSManagedDisplaySetCurrentSpace`, display from `CGSCopyManagedDisplayForSpace`, `CGSShowSpaces` /
+`CGSHideSpaces` best-effort) makes that Space current, and the call returns 1 only after re-reading
+the current Space and confirming it moved; `gt_window_raise` then re-resolves and raises the real
+window. Every symbol is `dlsym`-resolved on the handle `space.m` already opens — no link flag, no
+`#cgo` change, no `shim` edit (D24) — and none join `g_sl.loaded`'s minimum, so the read queries are
+unaffected. A 0 return (symbols absent, Space unknown or already current, switch did not take) falls
+through unchanged to P7.1. **Not verified: this host has one Space (D24); the cross-Space path is
+reasoned from how yabai / Hammerspoon drive `CGSManagedDisplaySetCurrentSpace`, not observed — a
+human confirms it under V6.2.** A macOS release that drops the symbols degrades this to P7.1's floor.
+
+**P7.4 — the default is to keep an app-reachable window.** With P7.1 in place an un-raiseable window
+still does something useful, so it stays on screen; P7.2 removes only what is actually gone. No
+`prefs` field to hide app-only-reachable windows — add one only if that turns out to be wanted.
+Recorded in `docs/ARCHITECTURE.md` under "The actionability rule".

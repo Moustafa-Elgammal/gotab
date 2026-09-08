@@ -353,6 +353,11 @@ out of AX's reach, and drop a window from the list once it is genuinely gone.
 tests; their on-machine verification is new rows in [Phase 6](#phase-6--verification)'s table
 (V6.13, V6.14).
 
+**All four tasks are code-complete (D47).** P7.1 landed first; P7.2 and P7.3 ran in parallel
+worktrees (disjoint file sets) and merged `--no-ff`, combined gate green with no cgo warnings. P7.3
+is the optional private-API extra and is **unverified on this one-Space host** — V6.2 confirms it.
+On-machine verification is V6.13 / V6.14 (and V6.2 for P7.3).
+
 - [x] **P7.1** Raise falls back to the application — `feat/P7.1` — **code landed.** When
       `gt_window_raise` cannot resolve a window id to an `AXUIElement` (status `GT_ERR_NO_WINDOW`)
       **and the owning process is a running application**, it now calls `activate_app(pid)` and
@@ -368,24 +373,32 @@ tests; their on-machine verification is new rows in [Phase 6](#phase-6--verifica
       exercised only on a machine. **Acceptance (V6.13):** in `gotab -switch`, selecting a window that
       `spike/raisetest` reports un-resolvable brings its application frontmost; over 10 such
       selections `OnError` logs zero `ErrNoWindow` for a window whose pid is alive.
-- [ ] **P7.2** Dead windows leave the list — `feat/P7.2` — a window is removed from the model when
-      its owning pid is no longer running, or when enumeration has not returned it for one full
-      rescan (it already is — confirm the removal path fires) . Add a pid-liveness check to
-      `doRescan`'s prune so a ⌘W'd window of a still-running app cannot survive on a stale
-      CoreGraphics entry. **Acceptance:** a window closed with ⌘W (its app still running) is absent
-      from `gotab -list` and from the panel within one rescan; a window whose process has exited is
-      absent within one rescan; `gotab -watch` shows the removal.
-- [ ] **P7.3** *(optional)* Space-aware raise — `feat/P7.3` — raise a window that is genuinely on
-      another Space by switching to that Space first (SkyLight: `CGSManagedDisplaySetCurrentSpace` or
-      the documented-enough equivalent), so P7.1's app-only fallback becomes the exception. **This is
-      a private-API bet and may not survive a macOS release** — it is optional, and P7.1 is the
-      floor. **Acceptance:** with two Spaces, selecting a window on the other Space switches to that
-      Space and brings that exact window forward; verified by a human alongside V6.2.
-- [ ] **P7.4** Decide and document the default — `feat/P7.4` — with P7.1 in place an un-raiseable
-      window is still useful (it reaches the app), so the default is to **keep** showing it; P7.2
-      only removes windows that are actually gone. Record this in `docs/ARCHITECTURE.md` next to the
-      enumeration rule, and add a `prefs` field only if hiding app-only-reachable windows turns out
-      to be wanted. **Acceptance:** `ARCHITECTURE.md` states the rule; `scripts/check.sh` green.
+- [x] **P7.2** Dead windows leave the list — `feat/P7.2` — **code landed.** `doRescan`'s prune now
+      drops a window on either ground: absent from both enumerations for a full pass (the ordinary
+      ⌘W close — already worked, confirmed against `Enumerate` and now commented) or its owning pid
+      has exited while a stale CoreGraphics entry still names it (D46's `cg`-only lingering). New
+      pure-Go `darwin.ProcessAlive(pid)` (`syscall.Kill(pid, 0)`; no cgo, not behind the frozen
+      shim); one `Kill` per distinct pid per rescan, memoized in a per-pass map preallocated in
+      `New`, no allocation added, swap-with-last prune invariant kept. Contract: `docs/tasks/P7.2.md`.
+      Gate green, no tests (D16 / D23). **Acceptance (V6.14):** a ⌘W'd window of a live app, and a
+      window whose process exited, are both absent from `gotab -list` and the panel within one
+      rescan; `gotab -watch` shows the removal.
+- [x] **P7.3** *(optional)* Space-aware raise — `feat/P7.3` — **code landed (private-API bet,
+      unverified).** Before P7.1's app-only fallback, `gt_window_raise` calls
+      `gt_space_switch_to_window(wid)`: if the window is on another Space, SkyLight
+      (`CGSManagedDisplaySetCurrentSpace` + `CGSCopyManagedDisplayForSpace`, `CGSShowSpaces` /
+      `CGSHideSpaces` best-effort) makes that Space current and returns 1 only after confirming the
+      current Space moved; the raise then re-resolves the real window. All symbols `dlsym`-guarded on
+      the handle `space.m` already opens (no link flag / `#cgo` / `shim` change — D24); a 0 return
+      falls through unchanged to P7.1. Contract: `docs/tasks/P7.3.md`. Gate green, no tests. **This
+      host has one Space (D24) — the cross-Space path is reasoned, not observed. `assumption` →
+      V6.2:** a human confirms selecting an other-Space window switches Space and raises that exact
+      window. A macOS release dropping the symbols degrades this to P7.1's floor.
+- [x] **P7.4** Decide and document the default — **done (D47).** With P7.1 in place an un-raiseable
+      window still reaches its app, so the default is to **keep** showing it; P7.2 removes only what
+      is genuinely gone. Recorded in `docs/ARCHITECTURE.md` under "The actionability rule". No
+      `prefs` field added — hiding app-only-reachable windows is not currently wanted; add one only
+      if it is. `scripts/check.sh` green.
 
 **Phase 7 verification (rows in Phase 6's table):**
 
@@ -907,4 +920,20 @@ Append one line per session. Newest last. This is how a cold session learns what
   tagged at P7.1 pointing to V6.13.
   **Next: P7.2 (dead-window prune in `doRescan`), then P7.4 (document the keep-by-default rule);
   P7.3 optional. On a Mac: V6.13 / V6.14, then the rest of the V6 checklist.**
+- `2026-09-08` — **Phase 7 code-complete (P7.1–P7.4), via a 2-way fan-out (D47).** P7.2 and P7.3 ran
+  in parallel worktrees against disjoint file sets — `internal/app/loop.go` + new
+  `internal/platform/darwin/process.go` vs `space.{h,m}` + `action.m` — and merged `--no-ff`; the
+  combined `scripts/check.sh` is green with no cgo warnings on a clean `go build -a`.
+  **P7.2:** `doRescan`'s prune drops a window whose owning pid has exited even while a stale
+  CoreGraphics entry still enumerates it — pure-Go `darwin.ProcessAlive` (`syscall.Kill(pid, 0)`),
+  one check per distinct pid per rescan, memoized per pass, no allocation added; the ordinary ⌘W
+  close was already handled by the not-seen path (now commented, confirmed against `Enumerate`).
+  **P7.3 (optional):** `gt_window_raise` tries a SkyLight Space switch
+  (`CGSManagedDisplaySetCurrentSpace`, every symbol `dlsym`-guarded, D24) and re-resolve before
+  P7.1's app-only fallback; a 0 return degrades to P7.1 unchanged. **Unverified — one Space on this
+  host (D24); V6.2 confirms it.** **P7.4 (D47):** the default is to keep an app-reachable window
+  visible (P7.1 makes it useful); P7.2 removes only what is gone; no `prefs` field. Recorded in
+  `ARCHITECTURE.md` under "The actionability rule".
+  **Next: the on-machine V6 checklist — V6.2 (also covers P7.3), V6.3–V6.5, V6.7, V6.9, V6.10, and
+  V6.13 / V6.14 for Phase 7.**
 
