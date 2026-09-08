@@ -747,4 +747,16 @@ Append one line per session. Newest last. This is how a cold session learns what
   verbatim FSF text (`gnu.org/licenses/gpl-3.0.txt`); README gained a `## License` section with the
   short notice and the copyright line. Per-file `SPDX-License-Identifier` headers are a possible
   follow-up, not done here.
+- `2026-09-08` — **V6.12 ran end to end: `v0.2.0` is cut and the feed is live.** The `release` job
+  (build, sign, zip, `gh release create`, render manifest) passed first try; the downloaded asset
+  verifies (SHA-256 matches, `CFBundleShortVersionString` `0.2.0`, `codesign --verify --strict` ok).
+  `deploy-pages` needed two repo-settings fixes, now both in `docs/tasks/V6.12.md`'s prereqs:
+  enabling Pages, and adding a **Ref type: Tag `v*`** rule to the `github-pages` environment (the
+  default allows only the default branch, so a tag deploy is rejected). The feed serves at the
+  `github.io` `FeedURL`, 301-redirecting to the account's custom domain `elgx.me/gotab/latest.json`;
+  `FeedURL` stays on `github.io` on purpose. One `release.yml` bug fixed in the same commit as this
+  line: `actions/checkout` shadows the annotated tag with a lightweight ref, so `notes` rendered as
+  the commit subject — a `git fetch --force origin refs/tags/<tag>:refs/tags/<tag>` before reading
+  it is the fix (v0.2.0's already-published body keeps the old text). **Next:** V6.11 —
+  `gotab -check-update` against the now-live host — plus the Phase 6 human/machine debts.
 
