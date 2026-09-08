@@ -409,6 +409,42 @@ On-machine verification is V6.13 / V6.14 (and V6.2 for P7.3).
 
 ---
 
+## Phase 8 — Reachability: the switcher has a surface without a terminal
+
+**Why this phase exists:** a user launched `/Applications/GoTab.app` from Finder and had no way to
+open Settings or quit it — GoTab is `LSUIElement` (no Dock tile, no app menu), and every entry point
+but the ⌥⇥ hotkey was a `gotab -flag` in a shell. The same launch also exposed the onboarding gap
+(D46's "unfiled" note): an Accessory app's permission `NSAlert` before the run loop may not surface,
+so a first-timer gets a silent background process.
+
+**Testing stays deferred (D16 / D23):** verification is new rows in [Phase 6](#phase-6--verification)'s
+table (V6.15).
+
+- [x] **P8.1** Menu-bar status item — `feat/P8.1-menubar` — **code landed.** One `NSStatusItem`
+      (`internal/platform/darwin/menubar.{h,m,go}`, `macwindow.on.rectangle` template symbol,
+      falls back to a "⌥⇥" title) with a disabled `GoTab <version>` header, **Settings…** and
+      **Quit GoTab**. "Settings…" launches `gotab -settings` as its own process — the standalone
+      entry point that owns its window / run loop / Regular policy — so the switcher process stays a
+      clean Accessory; "Quit GoTab" cancels `ctx`, the same path as ^C. Wired into `runSwitcher` via
+      `OnMain` before `RunLoop`; torn down in the shutdown goroutine. Verified on this machine: the
+      icon appears in the menu bar, the menu reads `[GoTab dev · Settings… · Quit GoTab]`, "Settings…"
+      opens the window, "Quit GoTab" exits clean (code 0). Contract: `docs/tasks/P8.1.md`. Gate
+      green, no tests (D16 / D23). **`assumption` → V6.15:** the onboarding `NSAlert` for an
+      Accessory app before the run loop — untouched here — still needs to be seen to surface (D46 /
+      V6.9); if it does not, a first-time Finder launch is silent until this menu is used.
+- [ ] **P8.2** *(if wanted)* Reliable first-run onboarding — the `NSAlert` an Accessory app shows
+      before `[NSApp run]` may not come forward (D46, observed 2026-09-08). Options: force it with a
+      real run-loop spin, defer onboarding until after `CreatePanel`, or route first-run through the
+      menu. Decide alongside V6.9.
+
+**Phase 8 verification (row in Phase 6's table):**
+
+| ID | what | acceptance | needs |
+|---|---|---|---|
+| **V6.15** | P8.1 menu bar, and the onboarding gap | on a **clean** account, `open /Applications/GoTab.app`: the menu-bar icon appears, "Settings…" opens the window, "Quit GoTab" exits; and whether the permission `NSAlert` surfaces on that first launch (the D46 "unfiled" observation — settle it here) | a human, a clean account |
+
+---
+
 ## Log
 
 Append one line per session. Newest last. This is how a cold session learns what happened.
@@ -985,4 +1021,16 @@ Append one line per session. Newest last. This is how a cold session learns what
   human with VoiceOver still owes: the container label, the `-settings` control labels, and every
   spoken announcement. Gate green; `-demo` also useful for V6.3/V6.4 driving.
   **Next: unchanged — the human/hardware V6 checklist above.**
+- `2026-09-08` — **A user hit the Finder-launch grant bug for real; then Phase 8 opened.** Root cause
+  confirmed by test: `open /Applications/GoTab.app` makes the app its own responsible process
+  (`app.gotab`), which had no Accessibility grant — the ones that "worked" belonged to the terminal
+  (direct exec borrows it, PLATFORM-LESSONS §5). Fix for the user: remove + re-add GoTab in
+  Settings → Privacy → Accessibility (a stale ad-hoc entry won't re-toggle). **New Phase 8 —
+  Reachability. P8.1 (landed):** a menu-bar `NSStatusItem` — `GoTab <version>` header, **Settings…**
+  (spawns `gotab -settings`), **Quit GoTab** (cancels `ctx`) — so a Finder-installed switcher finally
+  has a surface. `internal/platform/darwin/menubar.{h,m,go}` + `runSwitcher` wiring; verified live
+  (icon shows, menu correct, Settings opens, Quit exits clean). **P8.2 (open):** the onboarding
+  `NSAlert` for an Accessory app before the run loop may not surface (D46 "unfiled", observed today)
+  — decide with V6.9. Verification: **V6.15** (a clean account). Gate green.
+  **Next: unchanged — the human/hardware V6 checklist, now including V6.15.**
 

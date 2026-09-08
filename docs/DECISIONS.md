@@ -1776,3 +1776,40 @@ silent, the fix is P5.2's: put the label on the window/panel, or make the contai
 **Not done:** the `gotab -settings` control labels (System Events' `entire contents` hangs on that
 window — Accessibility Inspector or VoiceOver needed), and every announcement. V6.10 stays
 **partial**.
+
+---
+
+## D52 · The Finder-launch grant bug is real, and Phase 8 gives GoTab a surface — 2026-09-08
+
+A user launched `/Applications/GoTab.app` from Finder: it ran, but ⌥⇥ did nothing. Reproduced and
+pinned:
+
+| launch | result |
+|---|---|
+| `/Applications/GoTab.app/Contents/MacOS/GoTab -switch` from a terminal | `switcher ready` — works |
+| `open /Applications/GoTab.app` | runs, repeated `TCCAccessRequest` in the log, switcher never starts |
+
+**Cause.** `open` / LaunchServices makes the app its own responsible process, identity `app.gotab`.
+That copy had no Accessibility grant. A terminal launch is different — TCC attributes the permission
+to the *responsible* process, and the terminal is commonly granted, so a direct exec borrows it
+(PLATFORM-LESSONS §5). The bundle is ad-hoc signed (no Team ID), so its grant is tied to that exact
+copy and does not carry over from a terminal run or a previous build. `ensurePermissions` then sits
+in its 5-minute poll loop waiting for a grant the user was never clearly asked for.
+**Fix for a user:** remove GoTab from Settings → Privacy → Accessibility and re-add
+`/Applications/GoTab.app` (a stale ad-hoc entry does not work re-toggled); same for Screen Recording.
+
+**Two bugs behind it, both filed now:**
+
+1. **No non-terminal surface.** GoTab is `LSUIElement` — no Dock tile, no app menu — so Settings and
+   Quit were reachable only as `gotab -flag` in a shell. → **P8.1** (this commit): an `NSStatusItem`
+   with `GoTab <version>` / **Settings…** / **Quit GoTab**. "Settings…" spawns `gotab -settings` (the
+   standalone entry point owns its window, run loop and Regular policy, so the switcher stays a clean
+   Accessory); "Quit GoTab" cancels `ctx`. `menubar.{h,m,go}` + `runSwitcher` wiring, torn down in
+   the shutdown goroutine. Verified live: icon in the menu bar, menu
+   `[GoTab dev · Settings… · Quit GoTab]`, Settings opens, Quit exits code 0.
+2. **Onboarding may be silent.** The permission `NSAlert` runs before `[NSApp run]` in an Accessory
+   app and, on this `open` launch, did not visibly surface. → **P8.2** (open), settled with V6.9 /
+   **V6.15**: force it with a run-loop spin, defer onboarding past `CreatePanel`, or route first-run
+   through the menu.
+
+Phase 8 — Reachability. Verification is V6.15 (a clean account).

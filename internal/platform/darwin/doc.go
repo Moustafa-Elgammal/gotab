@@ -24,6 +24,10 @@
 // need ImageRef handed out as a pointer, which changes a frozen type; the finalizer was always a
 // detector, never the mechanism, so ARCHITECTURE.md's rule stands unchanged.
 //
+// menubar.{h,m,go} (P8.1) is the one surface a Finder-installed switcher has: GoTab is LSUIElement,
+// so an NSStatusItem is how a user reaches Settings or quits without a terminal. Its actions cross
+// back into Go — "Settings…" spawns `gotab -settings`, "Quit" cancels the run.
+//
 // This package is deliberately not unit-tested. It is the humble object — correctness here is
 // verified at runtime by the spikes under spike/, not by mocks.
 package darwin
