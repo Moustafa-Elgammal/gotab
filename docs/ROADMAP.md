@@ -1121,3 +1121,7 @@ Append one line per session. Newest last. This is how a cold session learns what
   `release.yml` also copies it to `_site/install.sh` so `https://elgx.me/gotab/install.sh` serves it;
   `raw.githubusercontent.com/.../main/scripts/get.sh` is the always-current copy. README + site
   install sections lead with the one-liner. Tested end to end against the live `v1.0.0` release.
+- `2026-09-08` — **Release `v1.0.1`.** Ships `scripts/get.sh` (D57): `curl -fsSL
+  https://elgx.me/gotab/install.sh | bash`. `release.yml` deploys the script to `_site/install.sh`
+  alongside the site and `latest.json`, so the short URL the site links to goes live with this tag.
+  Status pills → `v1.0.1`; no functional code change since `v1.0.0` beyond the installer.
