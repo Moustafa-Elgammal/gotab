@@ -600,6 +600,11 @@ func runSwitcher(demo bool) int {
 	r := &panelRenderer{opts: p.LayoutOpts(), pf: pf}
 	l.OnState = r.onState
 
+	// VoiceOver press-to-raise (D59): a VO user pressing a panel tile selects it and activates — the
+	// same commit as releasing ⌥. Post is non-blocking and safe from the main thread, where the
+	// accessibility press lands.
+	darwin.OnTileActivate(func(i int) { l.Post(app.Event{Kind: app.Choose, Index: i}) })
+
 	// Restyle on a Light/Dark flip. onChange runs on the main thread and ApplyTheme is non-blocking.
 	if err := darwin.WatchAppearance(func() { darwin.ApplyTheme() }); err != nil {
 		fmt.Fprintf(os.Stderr, "gotab: appearance watch: %v\n", err)
@@ -641,6 +646,7 @@ func runSwitcher(demo bool) int {
 	go func() {
 		<-loopDone
 		darwin.StopHotkey()
+		darwin.OnTileActivate(nil)
 		pf.Stop()
 		darwin.StopObservers()
 		darwin.StopWatchingAppearance()

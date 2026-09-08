@@ -23,6 +23,9 @@ const (
 	Cycle
 	// Activate — commit to the current selection: raise that window and dismiss.
 	Activate
+	// Choose — commit to the entry at Index (a VoiceOver press on a specific tile, D59): select it,
+	// then the same raise-and-dismiss as Activate.
+	Choose
 	// Quit — stop the loop.
 	Quit
 )
@@ -30,8 +33,9 @@ const (
 // Event is one thing that happened. Zero size beyond its fields; posting one allocates nothing.
 type Event struct {
 	Kind   Kind
-	Window core.WindowID // Focused
-	Dir    core.Direction
+	Window core.WindowID  // Focused
+	Dir    core.Direction // Cycle
+	Index  int            // Choose — position in the presentation order
 }
 
 // Loop owns the model. Construct with New, drive with Run, feed with Post and Rescan.
@@ -160,22 +164,36 @@ func (l *Loop) handle(e Event) bool {
 	case Dismiss:
 		l.visible = false
 	case Activate:
-		// P2.5 landed, so this is a real switch now: raise the selected window, then hide. The raise
-		// is Mach IPC and can take up to the messaging timeout — acceptable on this goroutine
-		// (action.go), and it must precede the hide or the panel vanishes before anything moves. A
-		// stale selection (window closed mid-summon) comes back ErrNoWindow and goes to OnError; the
-		// switcher still dismisses.
-		if l.sel.ID != 0 {
-			if err := darwin.Raise(l.sel.ID); err != nil && l.OnError != nil {
-				l.OnError(fmt.Errorf("activate window %d: %w", l.sel.ID, err))
-			}
+		l.activateSelection()
+	case Choose:
+		// A VoiceOver press on tile e.Index (D59). Set the cursor there — Selection.Set clamps into
+		// the list — then commit exactly as Activate does. Ignored when not summoned, like Cycle.
+		if !l.visible {
+			return false
 		}
-		l.visible = false
+		l.sel.Set(l.order, l.model, e.Index)
+		l.activateSelection()
 	case Quit:
 		return true
 	}
 	l.notify()
 	return false
+}
+
+// activateSelection commits to l.sel: raise that window, then hide. Shared by Activate (⌥ released)
+// and Choose (a VoiceOver press on a specific tile — D59).
+//
+// P2.5: the raise is Mach IPC and can take up to the messaging timeout — acceptable on this goroutine
+// (action.go) — and it must precede the hide, or the panel vanishes before anything moves. A stale
+// selection (the window closed mid-summon) comes back ErrNoWindow and goes to OnError; the switcher
+// still dismisses.
+func (l *Loop) activateSelection() {
+	if l.sel.ID != 0 {
+		if err := darwin.Raise(l.sel.ID); err != nil && l.OnError != nil {
+			l.OnError(fmt.Errorf("activate window %d: %w", l.sel.ID, err))
+		}
+	}
+	l.visible = false
 }
 
 // doRescan re-reads the world and reconciles the model with it.

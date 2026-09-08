@@ -2039,3 +2039,31 @@ that "Window switcher" is now actually heard on summon, and the selection — wi
 on every ⌥⇥ cycle. Tile press stays a deliberate no-op (`panel.h` frozen, no raise callback); a
 VoiceOver user commits by releasing ⌥, same as a sighted user. Wiring press-to-raise remains a
 separate follow-up (it needs a new exported callback + an absolute-select event in `internal/app`).
+
+---
+
+## D59 · VoiceOver press-to-raise — a tile press now switches, and panel.h stays frozen — 2026-09-08
+
+P5.2 made `-[GTTileElement accessibilityPerformPress]` a deliberate no-op: `panel.h` is frozen by the
+Phase 3 carve and exposes no way to raise a window from the panel, so a VoiceOver user committed only
+by releasing the ⌥ chord. With VoiceOver running that is awkward — the VO cursor navigates the tiles
+and "press this one" is the natural gesture. This wires it, the same way `timing.h` added the V6.3
+hook without touching `panel.h`:
+
+- **`a11yaction.{h,go}`** (new pair). `a11yaction.h` declares `extern void goPanelChooseTile(int32_t
+  index)`; `a11yaction.go` exports it and stores a callback set by `darwin.OnTileActivate(func(int))`.
+  Inert until wired — `OnTileActivate(nil)` restores the no-op, and the shutdown goroutine clears it.
+- **`panel.m`.** `GTTileElement` gains a `tileIndex` ivar (its position in the last frame, set in
+  `a11y_sync`, `-1` until then). `accessibilityPerformPress` now calls `goPanelChooseTile(tileIndex)`
+  and returns `YES` when the index is valid.
+- **`internal/app/loop.go`.** New `Choose` event kind carrying `Index int`; `handle` sets the cursor
+  with `Selection.Set` (already existed, P1.5 — clamps into the list) and then runs the shared
+  `activateSelection()` — the raise-then-hide body factored out of `Activate`. Ignored when not
+  summoned, like `Cycle`. `BenchmarkHandleGesture` still 0 allocs/op (V6.8).
+- **`cmd/gotab/main.go`.** `runSwitcher` wires `darwin.OnTileActivate(func(i int){ l.Post(app.Event{
+  Kind: app.Choose, Index: i}) })`. `Loop.Post` is non-blocking and safe from the main thread, where
+  the accessibility press lands.
+
+No `panel.h` / `internal/core/api.go` change. `check.sh` + `build.sh` (minos 12.0) green. **V6.10's
+§6 changes:** the tile press is no longer a no-op to confirm — a VoiceOver press must raise that
+window and dismiss the panel, the same end state as releasing ⌥.

@@ -17,7 +17,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include "panel.h"
-#include "timing.h" // V6.3 scaffold: gt_timing_arm / goTimingFrameCommitted. Inert unless armed.
+#include "timing.h"     // V6.3 scaffold: gt_timing_arm / goTimingFrameCommitted. Inert unless armed.
+#include "a11yaction.h" // P5.2 follow-up (D59): goPanelChooseTile — VoiceOver press-to-raise. Inert
+                        // unless darwin.OnTileActivate has been wired.
 
 // ---------------------------------------------------------------------------
 // State. One panel per process; all of this is main-thread-only (panel.h THREADING).
@@ -125,16 +127,25 @@ static NSRect tile_image_rect(NSRect tile) {
 // One synthetic accessibility element per tile (P5.2). NSAccessibilityElement already does the
 // flipped-parent coordinate conversion for accessibilityFrameInParentSpace, which is why the tiles
 // can be reported in the same top-left frame drawRect: uses. Role is "button" because activating a
-// tile means "switch to this window" -- though the press itself travels the ordinary path (release
-// the modifier), since panel.h exposes no Go callback to raise a window from here; accessibility
-// PerformPress is a deliberate no-op. Compiled without ARC: elements are owned by g_a11y_children.
+// tile means "switch to this window".
+//
+// Press-to-raise (D59): a VoiceOver user navigating the tiles with the VO cursor presses one and
+// goPanelChooseTile hands the index to Go, which selects it and activates — the same end state as
+// releasing the ⌥ chord, which is how a sighted user commits. Inert (returns NO, the old no-op) until
+// cmd/gotab wires darwin.OnTileActivate. tileIndex is the position in the last rendered frame, set by
+// a11y_sync; -1 until then. Compiled without ARC: elements are owned by g_a11y_children.
 @interface GTTileElement : NSAccessibilityElement {
 @public
     BOOL tileSelected;
+    int32_t tileIndex;
 }
 @end
 
 @implementation GTTileElement
+- (instancetype)init {
+    if ((self = [super init])) tileIndex = -1;
+    return self;
+}
 - (NSAccessibilityRole)accessibilityRole {
     return NSAccessibilityButtonRole;
 }
@@ -142,7 +153,9 @@ static NSRect tile_image_rect(NSRect tile) {
     return tileSelected;
 }
 - (BOOL)accessibilityPerformPress {
-    return NO;
+    if (tileIndex < 0) return NO;
+    goPanelChooseTile(tileIndex);
+    return YES;
 }
 @end
 
@@ -187,6 +200,7 @@ static void a11y_sync(void) {
         [e setAccessibilityLabel:a11y_label(t)];
         [e setAccessibilityFrameInParentSpace:NSMakeRect(t->x, t->y, t->w, t->h)];
         e->tileSelected = (t->selected != 0);
+        e->tileIndex = i; // position in this frame — what goPanelChooseTile hands back (D59)
     }
 }
 
