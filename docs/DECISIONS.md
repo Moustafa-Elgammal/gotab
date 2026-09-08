@@ -1843,3 +1843,49 @@ formality clang needs). Behaviour on macOS 14+ is byte-for-byte the same.
 package's whole below-floor story depends on every such call being guarded, so an unguarded one is a
 bug. Caveat: it only bites under `build.sh` (minos 12.0); a plain `go build` at the SDK target still
 cannot see the condition.
+
+---
+
+## D54 · The main loop was CFRunLoopRun, not -[NSApp run] — the app read as "Not Responding" and the menu bar was dead — 2026-09-08
+
+A user running the installed `/Applications/GoTab.app`: ⌥⇥ switched windows fine, but Activity
+Monitor showed **GoTab (Not Responding)** and clicking the menu-bar icon did nothing.
+
+**One cause.** `runloop.m` ran `CFRunLoopRun()` on the main thread, chosen in D32 on the premise
+that "nothing depends on NSApp's event-dispatch state" — true when a never-key `NSPanel` was the
+only surface. `CFRunLoopRun()` *turns* the loop (so `darwin.OnMain`, the `NSWorkspace` observers, CA
+commits and the appearance KVO all work, and the panel renders), but it never calls
+`-[NSApp nextEventMatchingMask:]`, so the process never **dequeues** AppKit events. Two things need
+that:
+
+1. **The system's app-responsiveness check.** macOS flags a process "Not Responding" when its main
+   thread stops servicing the event queue. The ⌥⇥ hotkey kept working throughout because it runs on
+   its own dedicated thread with its own `CGEventTap` + `CFRunLoopRun` (D33), independent of the
+   main thread — which is why the symptom looked cosmetic.
+2. **The menu-bar status item (P8.1).** A click on an `NSStatusItem` is a mouse event delivered
+   through `-[NSApp sendEvent:]`, which only runs inside `-[NSApp run]`'s loop. Under `CFRunLoopRun()`
+   the click was never dispatched, so the menu never opened and "Settings…" never fired. The icon
+   itself appeared because installing it only needs the main dispatch queue, which *was* serviced.
+
+Same defect hit `gotab -settings`: its window (same `RunLoop()`) would have been non-interactive and
+that process "Not Responding" too.
+
+**Fix.** `gt_run_loop()` is now `-[NSApp run]`. It does its own `-finishLaunching` and per-turn
+autorelease pool, so both were dropped; the shared `NSApplication` and its activation policy are
+still set earlier by `gt_panel_create` / `gt_settings_open`. `gt_run_loop_stop()` can no longer be
+`CFRunLoopStop` from another thread — it now hops to the main queue and calls `[NSApp stop:]` plus a
+no-op `NSEventTypeApplicationDefined` event (`-stop:` only takes effect after `-run` processes one
+more event, and an idle `-run` sits in `nextEventMatchingMask:` on `distantFuture`). A `g_running`
+flag keeps a stop with no loop running a clean no-op.
+
+**Verified on this machine** (built `.app`, both grants):
+
+- `-switch` stayed responsive to AX/AppleEvent queries (~0.4 s each) across 50 s of runtime; under
+  the bug the same query blocks for the full 6 s messaging timeout within seconds of launch.
+- SIGINT still tears `-switch` down cleanly (the new `gt_run_loop_stop` path).
+- `gotab -settings` shows "GoTab Settings", its controls respond to synthetic clicks, and closing
+  the window exits the process (`windowWillClose:` → `goSettingsClosed` → `StopRunLoop`).
+- The live menu-bar *click* still wants a human (V6.15); the mechanism it was missing — event
+  dispatch — is what this restores.
+
+Gate green, no tests (D16 / D23).

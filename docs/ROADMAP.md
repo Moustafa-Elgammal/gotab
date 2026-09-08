@@ -432,6 +432,11 @@ table (V6.15).
       green, no tests (D16 / D23). **`assumption` → V6.15:** the onboarding `NSAlert` for an
       Accessory app before the run loop — untouched here — still needs to be seen to surface (D46 /
       V6.9); if it does not, a first-time Finder launch is silent until this menu is used.
+      **Follow-up (D54, 2026-09-08):** on the installed build the icon appeared but its menu never
+      opened, and Activity Monitor showed "Not Responding" — the main loop was `CFRunLoopRun()`, which
+      turns the run loop but never dequeues AppKit events, so the status-item click was never
+      dispatched and the system's responsiveness check went unanswered. `runloop.m` now runs
+      `-[NSApp run]`. Re-check the click path in V6.15.
 - [ ] **P8.2** *(if wanted)* Reliable first-run onboarding — the `NSAlert` an Accessory app shows
       before `[NSApp run]` may not come forward (D46, observed 2026-09-08). Options: force it with a
       real run-loop spin, defer onboarding until after `CreatePanel`, or route first-run through the
@@ -441,7 +446,7 @@ table (V6.15).
 
 | ID | what | acceptance | needs |
 |---|---|---|---|
-| **V6.15** | P8.1 menu bar, and the onboarding gap | on a **clean** account, `open /Applications/GoTab.app`: the menu-bar icon appears, "Settings…" opens the window, "Quit GoTab" exits; and whether the permission `NSAlert` surfaces on that first launch (the D46 "unfiled" observation — settle it here) | a human, a clean account |
+| **V6.15** | P8.1 menu bar, and the onboarding gap | on a **clean** account, `open /Applications/GoTab.app`: the menu-bar icon appears **and its menu opens on click** (D54), "Settings…" opens the window, "Quit GoTab" exits; Activity Monitor shows GoTab **responding** while `-switch` sits idle (D54); and whether the permission `NSAlert` surfaces on that first launch (the D46 "unfiled" observation — settle it here) | a human, a clean account |
 
 ---
 
@@ -702,7 +707,9 @@ Append one line per session. Newest last. This is how a cold session learns what
   releases every `ImageRef`; the thumbnail-appears / `LiveImages` checks need the Screen Recording
   grant → V6.4. **P3.4 (D31):** palette + HUD vibrancy from the effective appearance, KVO restyle;
   integrator calls `ApplyTheme` right after `CreatePanel`.
-  **Integration (D32):** `runloop.{h,m,go}` (`CFRunLoopRun`, not `-[NSApp run]`), a `panelRenderer`
+  **Integration (D32):** `runloop.{h,m,go}` (`CFRunLoopRun` — later corrected to `-[NSApp run]` in
+  D54, when the status item and the "Not Responding" flag showed the event queue must be drained), a
+  `panelRenderer`
   on `Loop.OnState`, `Loop.Activate` now calls `darwin.Raise`. `gotab -switch` runs the whole
   pipeline on a live AppKit loop and scripts one summon — **P2.3b's open half closes here**, since
   the main loop now delivers `NSWorkspace` notifications. The gate gained `go build ./...` (a missing
@@ -1041,4 +1048,15 @@ Append one line per session. Newest last. This is how a cold session learns what
   `gt_capture`'s body; no behaviour change on 14+. `shim.go` now carries
   `-Werror=unguarded-availability-new` so the next unguarded below-floor call fails the build. Both
   `check.sh` and `build.sh` clean.
+- `2026-09-08` — **The main loop was `CFRunLoopRun()`, not `-[NSApp run]` (D54).** A user's installed
+  `/Applications/GoTab.app`: ⌥⇥ worked, but Activity Monitor read **Not Responding** and the menu-bar
+  icon's menu never opened. One cause — `CFRunLoopRun()` turns the run loop (`OnMain`, observers, CA
+  commits, KVO all fine) but never dequeues AppKit events, so the status-item click was never
+  dispatched (P8.1) and the system's responsiveness ping went unanswered. The ⌥⇥ tap was unaffected
+  because it owns a separate thread (D33), which is why it looked cosmetic. `runloop.m` now runs
+  `-[NSApp run]`; `gt_run_loop_stop()` switched from `CFRunLoopStop` to a main-thread `[NSApp stop:]`
+  + no-op event. Verified on the built `.app`: `-switch` answers AX queries in ~0.4 s across 50 s of
+  runtime (vs. a 6 s block under the bug), SIGINT still exits clean, and `gotab -settings` shows,
+  responds to clicks, and exits on window close. The live menu-bar click is V6.15's to confirm.
+  `check.sh` and `build.sh` green.
 
