@@ -414,8 +414,9 @@ On-machine verification is V6.13 / V6.14 (and V6.2 for P7.3).
 **Why this phase exists:** a user launched `/Applications/GoTab.app` from Finder and had no way to
 open Settings or quit it — GoTab is `LSUIElement` (no Dock tile, no app menu), and every entry point
 but the ⌥⇥ hotkey was a `gotab -flag` in a shell. The same launch also exposed the onboarding gap
-(D46's "unfiled" note): an Accessory app's permission `NSAlert` before the run loop may not surface,
-so a first-timer gets a silent background process.
+(D46's "unfiled" note): an Accessory app's permission `NSAlert` before the run loop did not surface,
+and the switcher blocked on a 5-minute grant poll, so a first-timer got a silent, hung background
+process. Both are fixed — P8.1 (D54) and P8.2 (D55).
 
 **Testing stays deferred (D16 / D23):** verification is new rows in [Phase 6](#phase-6--verification)'s
 table (V6.15).
@@ -430,23 +431,33 @@ table (V6.15).
       icon appears in the menu bar, the menu reads `[GoTab dev · Settings… · Quit GoTab]`, "Settings…"
       opens the window, "Quit GoTab" exits clean (code 0). Contract: `docs/tasks/P8.1.md`. Gate
       green, no tests (D16 / D23). **`assumption` → V6.15:** the onboarding `NSAlert` for an
-      Accessory app before the run loop — untouched here — still needs to be seen to surface (D46 /
-      V6.9); if it does not, a first-time Finder launch is silent until this menu is used.
+      Accessory app is now shown *after* `CreatePanel` and deferred onto the run loop by P8.2 (D55),
+      which is the fix for it not surfacing (D46 / V6.9); V6.15 confirms it on a clean account.
       **Follow-up (D54, 2026-09-08):** on the installed build the icon appeared but its menu never
       opened, and Activity Monitor showed "Not Responding" — the main loop was `CFRunLoopRun()`, which
       turns the run loop but never dequeues AppKit events, so the status-item click was never
       dispatched and the system's responsiveness check went unanswered. `runloop.m` now runs
       `-[NSApp run]`. Re-check the click path in V6.15.
-- [ ] **P8.2** *(if wanted)* Reliable first-run onboarding — the `NSAlert` an Accessory app shows
-      before `[NSApp run]` may not come forward (D46, observed 2026-09-08). Options: force it with a
-      real run-loop spin, defer onboarding until after `CreatePanel`, or route first-run through the
-      menu. Decide alongside V6.9.
+- [x] **P8.2** Reliable first-run onboarding — `feat/P8.2-onboarding` — **code landed (D55).** One
+      combined `NSAlert` names both grants and what each buys (*Accessibility — to enumerate windows
+      and raise the one you pick; Screen Recording — for window titles and the live thumbnails*),
+      shown **once** (a `PermissionsOnboarded` bool in the CFPreferences domain, cleared again
+      whenever both grants are held so a later revoke re-arms it). It is deferred onto the run loop's
+      first turn via `OnMain` — the fix for an Accessory app's alert not coming forward before
+      `-[NSApp run]` (D46 / D52) — and `gt_permissions_prompt` saves/restores the activation policy
+      around `runModal` so no Dock tile lingers. `ensurePermissions` and its 5-minute main-thread
+      poll are **gone**: `runSwitcher` always brings the switcher up, and `armSwitchHotkey` arms ⌥⇥
+      from a 750 ms background poll once Accessibility lands (D36's no-relaunch recovery, off the main
+      thread). The dismiss button is "Not Now"; `gotab -permissions` keeps "Quit". The TTY path
+      (deep-link print, no modal) is unchanged. `cmd/gotab/main.go` +
+      `internal/platform/darwin/permissions.{h,m,go}` + the `perm.alert.*` catalogs. Gate green,
+      `build.sh` clean at minos 12.0, no tests (D16 / D23). Verification: **V6.15**.
 
 **Phase 8 verification (row in Phase 6's table):**
 
 | ID | what | acceptance | needs |
 |---|---|---|---|
-| **V6.15** | P8.1 menu bar, and the onboarding gap | on a **clean** account, `open /Applications/GoTab.app`: the menu-bar icon appears **and its menu opens on click** (D54), "Settings…" opens the window, "Quit GoTab" exits; Activity Monitor shows GoTab **responding** while `-switch` sits idle (D54); and whether the permission `NSAlert` surfaces on that first launch (the D46 "unfiled" observation — settle it here) | a human, a clean account |
+| **V6.15** | P8.1 menu bar, and P8.2 onboarding | on a **clean** account, `open /Applications/GoTab.app`: the menu-bar icon appears **and its menu opens on click** (D54), "Settings…" opens the window, "Quit GoTab" exits; Activity Monitor shows GoTab **responding** while `-switch` sits idle (D54); the combined permission `NSAlert` **surfaces on the first launch and not the second** (D55), "Open System Settings" opens the pane(s), and granting brings ⌥⇥ up with **no relaunch** while the menu bar stays live throughout | a human, a clean account |
 
 ---
 
@@ -1066,3 +1077,16 @@ Append one line per session. Newest last. This is how a cold session learns what
   the universal `.app`, cuts the GitHub Release with the zip + SHA-256, and renders `latest.json` +
   the site to Pages from the annotated tag's subject line.
 
+- `2026-09-08` — **P8.2 — first-run onboarding is one combined ask, shown once, and never blocks
+  (D55).** The other half of the D52 Finder-launch bug (D54 was the run loop). Before: `-switch`
+  gated on `ensurePermissions` *before* `CreatePanel` — an `NSAlert` an Accessory app could not bring
+  forward, then a 5-minute main-thread grant poll, so the switcher had no surface while it waited.
+  Now: `onboardPermissions` runs after `CreatePanel` and defers the modal onto the run loop's first
+  turn (`OnMain`), where the app can come forward; it names both grants (*Accessibility — enumerate +
+  raise; Screen Recording — titles + live thumbnails*), shows once via a `PermissionsOnboarded`
+  CFPreferences bool that clears when both grants are held, and its dismiss button is "Not Now".
+  `ensurePermissions` is deleted; `armSwitchHotkey` arms ⌥⇥ from a 750 ms background poll once
+  Accessibility lands — no relaunch, off the main thread. `gt_permissions_prompt` gained a
+  `can_defer` arg and now restores the activation policy after `runModal`. `check.sh` +
+  `build.sh` (minos 12.0) green, no tests (D16 / D23). Verification: **V6.15**.
+  **Next: unchanged — the human/hardware V6 checklist, now V6.13–V6.15 plus the earlier rows.**

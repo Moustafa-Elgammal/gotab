@@ -31,7 +31,7 @@ void gt_permissions_open_pane(const char *which) {
     }
 }
 
-gt_status gt_permissions_prompt(int32_t need_ax, int32_t need_sr) {
+gt_status gt_permissions_prompt(int32_t need_ax, int32_t need_sr, int32_t can_defer) {
     @autoreleasepool {
         // No window server (headless CI, ssh with no forwarding): -[NSAlert runModal] would block
         // forever with nothing able to answer it. Say so and let the caller fall back to text.
@@ -40,8 +40,12 @@ gt_status gt_permissions_prompt(int32_t need_ax, int32_t need_sr) {
         }
 
         [NSApplication sharedApplication];
-        // Regular so the alert comes to the front like an app dialog rather than a background beep.
-        if ([NSApp activationPolicy] != NSApplicationActivationPolicyRegular) {
+        // Regular for the modal's lifetime so the alert comes to the front like an app dialog rather
+        // than a background beep an Accessory app cannot raise (D52). Restored below: by D55 this can
+        // run after gt_panel_create has already set Accessory, and a switcher with a Dock tile is
+        // wrong.
+        NSApplicationActivationPolicy saved_policy = [NSApp activationPolicy];
+        if (saved_policy != NSApplicationActivationPolicyRegular) {
             [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
         }
 
@@ -59,14 +63,20 @@ gt_status gt_permissions_prompt(int32_t need_ax, int32_t need_sr) {
         a.informativeText = info;
 
         [a addButtonWithTitle:NSLocalizedString(@"perm.alert.openSettings", nil)];
-        [a addButtonWithTitle:NSLocalizedString(@"perm.alert.quit", nil)];
+        [a addButtonWithTitle:NSLocalizedString(
+                                  can_defer ? @"perm.alert.notNow" : @"perm.alert.quit", nil)];
 
         [NSApp activateIgnoringOtherApps:YES];
+        [a.window makeKeyAndOrderFront:nil];
         NSModalResponse r = [a runModal];
         [a release];
 
+        if (saved_policy != NSApplicationActivationPolicyRegular) {
+            [NSApp setActivationPolicy:saved_policy];
+        }
+
         if (r != NSAlertFirstButtonReturn) {
-            return GT_ERR_UNAVAILABLE; // the user chose Quit
+            return GT_ERR_UNAVAILABLE; // "Not Now" / "Quit"
         }
 
         // CGRequestScreenCaptureAccess shows its own system dialog and, importantly, registers the

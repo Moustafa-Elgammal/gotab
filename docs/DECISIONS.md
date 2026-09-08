@@ -1889,3 +1889,47 @@ flag keeps a stop with no loop running a clean no-op.
   dispatch — is what this restores.
 
 Gate green, no tests (D16 / D23).
+
+---
+
+## D55 · First-run onboarding: one combined ask, shown once, and it never blocks the switcher — 2026-09-08
+
+The Finder-launch failure D52 pinned had two halves. D54 fixed the run loop; this is the onboarding
+half (**P8.2**). Before this, `gotab -switch` called `ensurePermissions` **before** `CreatePanel` and
+the run loop: if Accessibility was missing it showed an `NSAlert`, then sat on the main thread in a
+5-minute `CheckPermissions` poll. Two things were wrong with that.
+
+1. **The alert did not reliably surface.** An Accessory app (`LSUIElement`) that has not started
+   `-[NSApp run]` cannot bring a modal forward — `activateIgnoringOtherApps:` has nothing to activate
+   yet. A first-timer got a background process and no dialog (D52, observed).
+2. **It blocked everything.** The menu bar (P8.1) and the panel came up *after* the gate, so while
+   the poll ran the switcher had no surface at all — Activity Monitor's "Not Responding" (D54) on top
+   of a window the user could not find or quit. And "Screen Recording missing" never showed a dialog
+   at all — it was a one-line stderr note, invisible from Finder.
+
+**What it is now.**
+
+- **`onboardPermissions` runs after `CreatePanel`, and the modal is deferred onto the run loop.** The
+  Finder path does `darwin.OnMain(func() { PromptPermissions(needAX, needSR, canDefer=true) })`, so
+  the alert fires on `-[NSApp run]`'s first turn, when the app *can* come forward. `gt_permissions_prompt`
+  now also saves and restores the activation policy around `runModal` (it goes Regular for the
+  modal's life, back to Accessory after) so no Dock tile lingers behind the already-created panel.
+- **One combined ask, both grants, phrased for what each buys:** *Accessibility — to enumerate
+  windows and raise the one you pick; Screen Recording — for window titles and the live thumbnails.*
+  "AX present, SR missing" now shows the dialog too, where before it was a silent stderr line.
+- **Shown once.** A bool `PermissionsOnboarded` in the CFPreferences domain (app state, not a
+  user setting — it stays out of `internal/prefs`' schema) gates the modal. It is *cleared* whenever
+  `perm.OK()`, so a later revoke re-arms the one-time prompt. The dismiss button is **"Not Now"**,
+  not "Quit" (`can_defer`); `gotab -permissions` keeps "Quit".
+- **Nothing blocks.** `ensurePermissions` and its 5-minute poll are gone. `runSwitcher` reads the
+  grants once and always brings the switcher up. `armSwitchHotkey` tries `StartHotkey`; on
+  `ErrNotTrusted` it starts a 750 ms background poll that arms ⌥⇥ the moment Accessibility lands —
+  D36's no-relaunch recovery, off the main thread. A mid-session grant still needs no relaunch; a
+  never-granted session is a live menu bar (Settings, Quit) rather than a hung process.
+- The TTY path is unchanged (D36): from a shell, print the `x-apple.systempreferences:` deep links,
+  no modal.
+
+**Verification** is still **V6.15** (a clean account, `open /Applications/GoTab.app`): the combined
+alert appears on first launch and not on the second, "Open System Settings" opens the pane(s),
+granting brings ⌥⇥ up with no relaunch, and the switcher is responsive with its menu bar throughout.
+Gate green, `build.sh` clean at minos 12.0, no tests (D16 / D23).

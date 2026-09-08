@@ -16,10 +16,18 @@
 // CGRequestScreenCaptureAccess so the app is registered in that list. Blocks on a nested modal run
 // loop until the user answers; the caller then polls gt_trusted()/gt_can_record() to recover.
 //
-// GT_OK if the user chose to open Settings, GT_ERR_UNAVAILABLE if they chose to quit, GT_ERR_INTERNAL
-// if there is no window server to show the alert on (the caller should fall back to a printed
-// explanation). Main thread only.
-gt_status gt_permissions_prompt(int32_t need_accessibility, int32_t need_recording);
+// The alert runs Regular for its lifetime and restores the prior activation policy afterwards, so an
+// Accessory app (GoTab is LSUIElement) gets a dialog that actually comes forward and no lingering
+// Dock tile. It is safe to call from the main queue *after* -[NSApp run] has started — deferring it
+// there is how a first-run alert reliably surfaces (D52 / D55).
+//
+// can_defer picks the second button: 0 -> "Quit" (the caller exits on it), 1 -> "Not Now" (the
+// caller keeps running and recovers in the background). Either way the return is the same.
+//
+// GT_OK if the user chose to open Settings, GT_ERR_UNAVAILABLE if they chose the second button,
+// GT_ERR_INTERNAL if there is no window server to show the alert on (the caller should fall back to a
+// printed explanation). Main thread only.
+gt_status gt_permissions_prompt(int32_t need_accessibility, int32_t need_recording, int32_t can_defer);
 
 // Opens one Privacy & Security pane: "accessibility" or "screen-recording"; anything else opens the
 // Privacy & Security root.

@@ -4,9 +4,10 @@
    Whitespace in the values (leading/trailing \n) matches en.json so the alert layout
    is unchanged. */
 
-"perm.alert.title" = "GoTab benötigt eine Berechtigung, um Fenster zu wechseln";
-"perm.alert.needAccessibility" = "• Bedienungshilfen — um Fenster hervorzuheben und zu beobachten und den ⌥⇥-Kurzbefehl zu erkennen.\n";
-"perm.alert.needScreenRecording" = "• Bildschirmaufnahme — für Fenstervorschauen und die Titel anderer Apps.\n";
+"perm.alert.title" = "GoTab benötigt zwei Berechtigungen, um Fenster zu wechseln";
+"perm.alert.needAccessibility" = "• Bedienungshilfen — um Fenster aufzulisten und das ausgewählte hervorzuheben.\n";
+"perm.alert.needScreenRecording" = "• Bildschirmaufnahme — für Fenstertitel und die Live-Vorschauen.\n";
 "perm.alert.instructions" = "\nAktivieren Sie diese in den Systemeinstellungen › Datenschutz & Sicherheit. GoTab erkennt die Änderung von selbst — ein Neustart ist nicht nötig.";
 "perm.alert.openSettings" = "Systemeinstellungen öffnen";
+"perm.alert.notNow" = "Jetzt nicht";
 "perm.alert.quit" = "Beenden";

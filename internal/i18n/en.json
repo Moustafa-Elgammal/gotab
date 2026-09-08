@@ -1,9 +1,10 @@
 {
-  "perm.alert.title": "GoTab needs permission to switch windows",
-  "perm.alert.needAccessibility": "• Accessibility — to raise and observe windows, and to see the ⌥⇥ shortcut.\n",
-  "perm.alert.needScreenRecording": "• Screen Recording — for window thumbnails and the titles of other apps.\n",
+  "perm.alert.title": "GoTab needs two permissions to switch windows",
+  "perm.alert.needAccessibility": "• Accessibility — to enumerate windows and raise the one you pick.\n",
+  "perm.alert.needScreenRecording": "• Screen Recording — for window titles and the live thumbnails.\n",
   "perm.alert.instructions": "\nTurn these on in System Settings › Privacy & Security. GoTab notices the change on its own — there is no need to relaunch it.",
   "perm.alert.openSettings": "Open System Settings",
+  "perm.alert.notNow": "Not Now",
   "perm.alert.quit": "Quit",
 
   "perm.cli.grantPrompt": "gotab: grant the missing permission in System Settings › Privacy & Security:",

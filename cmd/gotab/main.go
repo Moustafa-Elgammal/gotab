@@ -3,8 +3,9 @@
 // `gotab -switch` is the switcher: an ⌥⇥ event tap summons the panel, ⌥ held with ⇥ cycles the
 // selection, releasing ⌥ raises the chosen window, Esc dismisses. Behind it the event loop enumerates,
 // orders, lays out and draws, prefetches thumbnails, and restyles with the system appearance, all on a
-// live AppKit run loop. Without the Accessibility grant the tap cannot install, and -switch falls back
-// to a scripted summon so the render pipeline is still demonstrable. See docs/ROADMAP.md.
+// live AppKit run loop. It never blocks on a permission grant: a first run shows one combined ask,
+// once, and the switcher comes up regardless — ⌥⇥ arms itself once Accessibility lands (D55). See
+// docs/ROADMAP.md.
 //
 // The other flags are utilities: -settings, -permissions, -watch, -prefs, -check, and -check-update
 // (ask the release feed whether a newer build is out). User-facing onboarding strings resolve through
@@ -215,13 +216,16 @@ const (
 	paneScreenRecord  = "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
 )
 
-// promptForGrants asks the user to grant what is missing. From Finder (no TTY, window server present)
-// it is a modal alert whose "Open System Settings" opens the pane; from a shell, or when there is no
-// window server, it is a printed explanation plus opening the pane directly. Returns whether to
-// proceed to the wait loop — false only if the user quit the modal.
+// promptForGrants asks the user to grant what is missing, for `gotab -permissions`. From Finder (no
+// TTY, window server present) it is a modal alert whose "Open System Settings" opens the pane; from a
+// shell, or when there is no window server, it is a printed explanation plus opening the pane
+// directly. Returns whether to proceed to the wait loop — false only if the user chose Quit.
+//
+// The switcher's own first-run onboarding is onboardPermissions, not this: it never blocks and its
+// dismiss button is "Not Now", not "Quit".
 func promptForGrants(needAX, needSR bool) bool {
 	if !stderrIsTTY() {
-		if shown, proceed := darwin.PromptPermissions(needAX, needSR); shown {
+		if shown, proceed := darwin.PromptPermissions(needAX, needSR, false); shown {
 			return proceed
 		}
 		// No window server — fall through to the printed path.
@@ -279,37 +283,116 @@ func runPermissions() int {
 	return 1
 }
 
-// ensurePermissions gates the switcher on the grants it needs. Accessibility is mandatory — without it
-// gotab cannot enumerate, raise, or tap the hotkey. Screen Recording is optional (a warning, then it
-// runs degraded). A missing mandatory grant is prompted, System Settings is opened, and gotab polls
-// until it appears — recovering without a relaunch. macOS may relaunch gotab itself on an
-// Accessibility grant; the fresh process then passes here and never prompts.
-func ensurePermissions(ctx context.Context) bool {
-	p := darwin.CheckPermissions()
-	if p.Accessibility {
-		if !p.ScreenRecording {
+// prefOnboarded records that the first-run permission prompt has already been shown, so it appears
+// exactly once (D55). It is cleared again whenever both grants are in place, which re-arms the prompt
+// for a later revoke. Stored straight in the CFPreferences domain — it is app state, not a user
+// setting, so it stays out of internal/prefs' schema.
+const prefOnboarded = "PermissionsOnboarded"
+
+// onboardPermissions is the switcher's first-run permission ask (P8.2 / D55). One combined prompt
+// names the two grants GoTab needs —
+//
+//	Accessibility     — to enumerate windows and raise the one you pick
+//	Screen Recording  — for window titles and the live thumbnails
+//
+// — shown once, and not again unless a grant is later lost. It never blocks and never quits the
+// switcher: whatever the user does the menu bar is up, and armSwitchHotkey arms ⌥⇥ from a background
+// poll the moment Accessibility lands.
+//
+// From a shell (stderr is a TTY) it prints the System Settings deep links rather than steal focus
+// with a modal (D36). From Finder it defers the modal onto the first run-loop turn via OnMain: GoTab
+// is an Accessory app and its alert does not reliably come forward before -[NSApp run] is dequeuing
+// events (D52).
+func onboardPermissions(perm darwin.Permissions) {
+	store := darwin.Prefs{}
+
+	if perm.OK() {
+		if shown, _ := store.Bool(prefOnboarded); shown {
+			store.SetBool(prefOnboarded, false)
+			_ = store.Sync()
+		}
+		return
+	}
+
+	if stderrIsTTY() {
+		fmt.Fprintln(os.Stderr, i18n.T("perm.cli.grantPrompt"))
+		if !perm.Accessibility {
+			fmt.Fprintln(os.Stderr, "  "+i18n.T("perm.cli.accessibilityLabel")+"  "+paneAccessibility)
+		}
+		if !perm.ScreenRecording {
+			fmt.Fprintln(os.Stderr, "  "+i18n.T("perm.cli.screenRecordingLabel")+"  "+paneScreenRecord)
+		}
+		return
+	}
+
+	if shown, _ := store.Bool(prefOnboarded); shown {
+		// Asked once already. Note it quietly; the menu bar and armSwitchHotkey carry recovery.
+		if !perm.Accessibility {
+			fmt.Fprintln(os.Stderr, i18n.T("perm.cli.waitingAccessibility"))
+		} else {
 			fmt.Fprintln(os.Stderr, i18n.T("perm.cli.screenRecordingOff"))
 		}
-		return true
+		return
+	}
+	store.SetBool(prefOnboarded, true)
+	_ = store.Sync()
+
+	needAX, needSR := !perm.Accessibility, !perm.ScreenRecording
+	darwin.OnMain(func() { darwin.PromptPermissions(needAX, needSR, true) })
+}
+
+// armSwitchHotkey installs the ⌥⇥ event tap that drives the switcher, without ever blocking startup.
+//
+//   - demo: skip the tap and script summons (the -demo inspection path).
+//   - no Accessibility grant: StartHotkey returns ErrNotTrusted — the tap cannot install, and an
+//     ungranted one would install clean and then never fire. Rather than gate the whole switcher on
+//     it (the menu bar must still come up, and the panel the moment the grant lands), poll
+//     CheckPermissions in the background and arm the tap as soon as Accessibility appears — no
+//     relaunch (D36's recovery model, made non-blocking — D55).
+//   - any other StartHotkey failure: fall back to a scripted demo so the render path still works.
+func armSwitchHotkey(ctx context.Context, l *app.Loop, keyCode, modifiers int, demo bool) {
+	if demo {
+		fmt.Fprintln(os.Stderr, "gotab: -demo — scripted summon, no hotkey (panel summons and holds)")
+		go demoDriver(ctx, l)
+		return
 	}
 
-	if !promptForGrants(true, !p.ScreenRecording) {
-		return false // user chose Quit
+	start := func() error {
+		return darwin.StartHotkey(keyCode, modifiers, func(g darwin.Gesture) { postGesture(l, g) })
 	}
 
-	fmt.Fprintln(os.Stderr, i18n.T("perm.cli.waitingAccessibility"))
-	deadline := time.Now().Add(5 * time.Minute)
-	for ctx.Err() == nil && time.Now().Before(deadline) {
-		time.Sleep(750 * time.Millisecond)
-		if darwin.CheckPermissions().Accessibility {
-			fmt.Fprintln(os.Stderr, i18n.T("perm.cli.accessibilityGranted"))
-			return true
+	switch err := start(); {
+	case err == nil:
+		fmt.Println("switcher ready — hold ⌥ and press ⇥ to switch; ^C to quit.")
+		return
+	case !errors.Is(err, darwin.ErrNotTrusted):
+		fmt.Fprintf(os.Stderr, "gotab: hotkey unavailable (%v) — scripting a demo summon instead\n", err)
+		go demoDriver(ctx, l)
+		return
+	}
+
+	fmt.Println("switcher up — waiting for Accessibility; ⌥⇥ arms itself the moment it is granted. ^C to quit.")
+	go func() {
+		t := time.NewTicker(750 * time.Millisecond)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if !darwin.CheckPermissions().Accessibility {
+					continue
+				}
+				if e := start(); e != nil {
+					fmt.Fprintf(os.Stderr, "gotab: hotkey still unavailable after the Accessibility grant (%v)\n", e)
+					return
+				}
+				fmt.Fprintln(os.Stderr, i18n.T("perm.cli.accessibilityGranted"))
+				fmt.Println("switcher ready — hold ⌥ and press ⇥ to switch; ^C to quit.")
+				return
+			}
 		}
-	}
-	if ctx.Err() == nil {
-		fmt.Fprintln(os.Stderr, i18n.T("perm.cli.accessibilityStillMissing"))
-	}
-	return false
+	}()
 }
 
 // listWindows drives the enumeration and prints what came back. This is what verification looks like
@@ -490,11 +573,10 @@ func runSwitcher(demo bool) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	// Accessibility is mandatory; without it every part below degrades to nothing. Onboard and wait
-	// rather than starting a switcher that cannot switch (P4.3).
-	if !ensurePermissions(ctx) {
-		return 1
-	}
+	// Neither grant gates startup any more (D55). The switcher always comes up — menu bar, panel,
+	// run loop — and recovers ⌥⇥ and thumbnails without a relaunch as the grants land. perm is read
+	// once here; armSwitchHotkey and the prefetcher re-check as they go.
+	perm := darwin.CheckPermissions()
 
 	p := prefs.Load(darwin.Prefs{})
 
@@ -530,22 +612,18 @@ func runSwitcher(demo bool) int {
 	loopDone := make(chan error, 1)
 	go func() { loopDone <- l.Run(ctx) }()
 
-	// The real trigger: the ⌥⇥ event tap posts into the loop. gotab decides summon-vs-cycle nowhere —
-	// the tap thread already did (hotkey.h). Without the Accessibility grant the tap cannot install,
-	// and the scripted demo stands in so the render pipeline is still exercised.
-	hotkeyOK := false
-	switch {
-	case demo:
-		fmt.Fprintln(os.Stderr, "gotab: -demo — scripted summon, no hotkey (panel summons and holds)")
-		go demoDriver(ctx, l)
-	default:
-		if err := darwin.StartHotkey(p.HotkeyKeyCode, p.HotkeyModifiers, func(g darwin.Gesture) { postGesture(l, g) }); err != nil {
-			fmt.Fprintf(os.Stderr, "gotab: hotkey unavailable (%v) — scripting a demo summon instead\n", err)
-			go demoDriver(ctx, l)
-		} else {
-			hotkeyOK = true
-		}
+	// First-run permission onboarding: one combined ask, shown once, never blocking (D55). Queued
+	// before the menu bar so its alert is the first thing on the run-loop's first turn. -demo is an
+	// inspection path — no System Settings side effects.
+	if !demo {
+		onboardPermissions(perm)
 	}
+
+	// The real trigger: the ⌥⇥ event tap posts into the loop. gotab decides summon-vs-cycle nowhere —
+	// the tap thread already did (hotkey.h). Without the Accessibility grant the tap cannot install;
+	// armSwitchHotkey then arms it from a background poll once the grant lands, and for -demo it
+	// scripts summons instead.
+	armSwitchHotkey(ctx, l, p.HotkeyKeyCode, p.HotkeyModifiers, demo)
 
 	// The menu-bar status item (P8.1). GoTab is LSUIElement — no Dock tile, no app menu — so without
 	// this a switcher installed from Finder has no visible surface: Settings and Quit are reachable
@@ -571,11 +649,6 @@ func runSwitcher(demo bool) int {
 		darwin.StopRunLoop()
 	}()
 
-	if hotkeyOK {
-		fmt.Println("switcher ready — hold ⌥ and press ⇥ to switch; ^C to quit.")
-	} else {
-		fmt.Println("switcher up — scripted summon, selection cycling; ^C to quit.")
-	}
 	darwin.RunLoop() // blocks on this (the main) thread until StopRunLoop
 	return 0
 }
@@ -666,10 +739,10 @@ func postGesture(l *app.Loop, g darwin.Gesture) {
 	}
 }
 
-// demoDriver stands in for the hotkey when the Accessibility grant is missing: wait for the first
-// enumeration, show the panel, then step the selection forward on a slow tick so the update path is
-// visible too. ^C (ctx cancel) ends it; it deliberately never posts Activate, so running the demo
-// does not reorder the user's windows.
+// demoDriver stands in for the hotkey on the -demo path (and if StartHotkey fails for a reason other
+// than a missing grant): wait for the first enumeration, show the panel, then step the selection
+// forward on a slow tick so the update path is visible too. ^C (ctx cancel) ends it; it deliberately
+// never posts Activate, so running the demo does not reorder the user's windows.
 func demoDriver(ctx context.Context, l *app.Loop) {
 	select {
 	case <-ctx.Done():
