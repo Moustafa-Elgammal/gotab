@@ -4,7 +4,7 @@ A macOS window switcher written in Go. Built from scratch — its own bundle ID,
 from any existing install. Inspired by [AltTab](https://github.com/lwouis/alt-tab-macos); it shares
 none of its code.
 
-**Status: early release (`v0.3.0`).** Phases 0–7 are code-complete — the switcher works end to end
+**Status: early release (`v0.3.4`).** Phases 0–7 are code-complete — the switcher works end to end
 and ships as a signed universal `.app` — and on-device verification (latency, multi-Space, VoiceOver,
 a clean-account launch) is still in progress. See [docs/ROADMAP.md](docs/ROADMAP.md) for exactly where
 it stands. Overview page: <https://elgx.me/gotab/>.
