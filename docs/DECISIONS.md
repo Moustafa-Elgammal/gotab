@@ -1510,3 +1510,30 @@ orphans the CFPreferences domain and the TCC grants (D34).
 
 **assumption → V6.12 / V6.11:** the pipeline has not run — the repo is private, Pages is off, and
 there are no tags. V6.12 is the row for "it runs once, end to end"; V6.11 then becomes runnable.
+
+---
+
+## D43 · the app icon: a portrait source, a padded square master, `.icns` built by `sips` — 2026-09-08
+
+The art was delivered as `resources/assets/ico.png` — the GoTab gopher, 496×664, portrait, with its
+own white sticker outline and a transparent field. macOS icons are square (16…1024). Cropping the
+gopher or squashing it to fit were both rejected; instead it is centred on a 1024×1024 transparent
+canvas at 92% of the tile, and *that* — `resources/assets/icon-1024.png` — is the master the build
+consumes. The portrait `ico.png` stays in the tree as the human-editable original.
+
+- **Derived, not vendored.** `scripts/build.sh` renders ten exact-size PNGs with `sips` and packs
+  them into `Contents/Resources/AppIcon.icns` with `iconutil`, at build time. Same shape as the
+  rendered `latest.json` (D42): one committed source, the packaged form is a build artifact, never
+  committed. `sips` and `iconutil` are base-system — the same dependency tier as the script's
+  existing `lipo` / `otool` / `plutil` / `codesign`, so no new toolchain.
+- **The square master *is* committed** rather than derived at build. Padding a portrait image onto a
+  transparent square needs a real compositor, not `sips`; doing it once (a short Swift/CoreGraphics
+  snippet, kept in `resources/assets/README.md`) keeps every build on `sips` + `iconutil` alone.
+- **`CFBundleIconFile` is `AppIcon`**, extensionless by convention. A missing master is not fatal:
+  `build.sh` warns and skips, the same stance as an absent locale tree (D40) — the app still
+  launches, just with the generic bundle icon.
+- **16 and 32 px are weak.** The source is a detailed illustration; at list-icon sizes the
+  window-switcher badge on the gopher's belly turns to mud. A simplified small-size glyph is a
+  separate hand-drawn asset and is not done here.
+- The app is `LSUIElement` (D34, P4.2) so there is no Dock tile, but Finder, the Login Items list,
+  and the TCC / permissions prompts all render the bundle icon — it earns its place.

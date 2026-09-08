@@ -759,4 +759,12 @@ Append one line per session. Newest last. This is how a cold session learns what
   the commit subject — a `git fetch --force origin refs/tags/<tag>:refs/tags/<tag>` before reading
   it is the fix (v0.2.0's already-published body keeps the old text). **Next:** V6.11 —
   `gotab -check-update` against the now-live host — plus the Phase 6 human/machine debts.
+- `2026-09-08` — **App icon** (D43). The delivered art `resources/assets/ico.png` (gopher, 496×664
+  portrait, its own sticker outline) is centred on a transparent 1024² square at 92% of the tile
+  and committed as `resources/assets/icon-1024.png`; `build.sh` renders that to
+  `Contents/Resources/AppIcon.icns` with `sips` + `iconutil` and the plist gains `CFBundleIconFile`.
+  The square master is committed so the build stays on base-system tools (no Swift); the one-time
+  padding recipe is in `resources/assets/README.md`. 128 px and up look right; 16/32 px are muddy —
+  the art is detailed, a simplified small-size glyph is future work. `LSUIElement` means no Dock
+  tile, but Finder, login items and the TCC prompts all show it.
 
