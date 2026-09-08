@@ -322,7 +322,8 @@ coming back badly changes Phase 2/3 code rather than merely reporting on it.
 | **V6.8** | No allocation on the hot path | `go test ./internal/core/... -bench . -benchmem` still reports **0 allocs/op** for summon, cycle and dismiss after Phases 2–5 have wired real data through | — |
 | **V6.9** | Permissions onboarding (P4.3) | from a **revoked** state, `-switch` shows the alert, and granting in Settings brings the switcher up **without a relaunch** — the 750 ms poll picks it up. Both grants. The headless fallback and the poll are already exercised (D36); this is the modal + the human loop | a human |
 | **V6.10** | VoiceOver heard, not just written (P5.2) | with VoiceOver on (or Accessibility Inspector), driving `gotab -switch`: each tile is announced as "&lt;title&gt;, &lt;app&gt;", the selection is spoken on **every** ⌥⇥ cycle, and the panel reads as a container labelled "Window switcher". In `gotab -settings` every control — the steppers, the Appearance popup, the blocked-apps field, the hotkey recorder — has a spoken label. An agent host has no screen reader (D41) | a human |
-| **V6.11** | Update check against a real host (P5.3) | `gotab -check-update` run against the **published** `FeedURL` (not a `python3 -m http.server` copy): a manifest advertising a higher version prints the "available" line, an equal/older one prints "up to date", and an unreachable host prints the one-line warning and exits 0. `FeedURL` has no host today (D39/D41) | a host + a published manifest |
+| **V6.11** | Update check against a real host (P5.3) | `gotab -check-update` run against the **published** `FeedURL` (`moustafa-elgammal.github.io/gotab/latest.json`, not a `python3 -m http.server` copy): a manifest advertising a higher version prints the "available" line, an equal/older one prints "up to date", and an unreachable host prints the one-line warning and exits 0. The host now exists — `release.yml` populates it (D42) — but it only serves once the repo is public and V6.12 has run once | a public repo + a cut release |
+| **V6.12** | Release automation (CI/CD) (D42) | pushing a `v*` tag runs the gate, builds `GoTab.app` with the tag as `CFBundleShortVersionString`, and cuts a GitHub Release carrying `GoTab-<tag>.zip` + its `.sha256`; `latest.json` at the Pages URL then advertises that version. Contract + manual repo settings in `docs/tasks/V6.12.md`. Unblocks V6.11 | a public repo + Pages source = "GitHub Actions" |
 
 **A task contract goes in `docs/tasks/V6.N.md` before that task starts**, same as every other numbered
 task. They are deliberately not written yet: what V6.5 and V6.6 actually have to check depends on what
@@ -728,4 +729,22 @@ Append one line per session. Newest last. This is how a cold session learns what
   **Next: Phase 6 — verification.** The switcher is feature-complete; what remains is the V6
   checklist run against the assembled app, most of it needing a human at a Mac (V6.1, V6.2, V6.9,
   V6.10) or a machine/host (V6.7, V6.11). V6.1/V6.2 are the cheap Phase 0/3 debts to run first.
+- `2026-09-08` — **CI/CD: a `v*` tag now cuts a release, and the update feed has a real host (D42).**
+  `.github/workflows/release.yml` runs the gate, builds the universal `.app` with the tag as
+  `CFBundleShortVersionString` (`build.sh` gained a `GOTAB_SHORT_VERSION` override; `ci.yml` gained
+  `fetch-depth: 0` so `git describe --tags` resolves), `ditto`-zips it, and `gh release create`s a
+  GitHub Release with `GoTab-<tag>.zip` + its `.sha256`. It then renders `latest.json` from
+  `resources/appcast/latest.json` — now the manifest **template**: `min_macos` and the shape live
+  there, `version` / `url` / `notes` come from the tag — and publishes it to GitHub Pages via
+  `actions/deploy-pages` (source = "GitHub Actions", no `gh-pages` branch). `FeedURL` moves off the
+  never-hosted `gotab.app` to `https://moustafa-elgammal.github.io/gotab/latest.json`. First-party
+  `actions/*` + `gh` only. Still check-only (D39); the zip is ad-hoc signed (D38), so a downloader
+  needs right-click → Open until a notarization step exists. **New row V6.12** (the pipeline runs
+  once end to end); **V6.11** now depends on it. **Manual, once the repo is public:** Settings →
+  Pages → Source → "GitHub Actions", then `git tag -a v0.2.0 -m "…" && git push origin v0.2.0`.
+  **Next: unchanged** — Phase 6 verification proper; V6.1/V6.2 remain the cheap human debts.
+- `2026-09-08` — **Licensed GPL-3.0-or-later** ahead of publishing the repo. `LICENSE` holds the
+  verbatim FSF text (`gnu.org/licenses/gpl-3.0.txt`); README gained a `## License` section with the
+  short notice and the copyright line. Per-file `SPDX-License-Identifier` headers are a possible
+  follow-up, not done here.
 

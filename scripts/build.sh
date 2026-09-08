@@ -8,9 +8,11 @@ APP_NAME="GoTab"
 BUNDLE_ID="app.gotab"            # placeholder — change before any public release
 
 # Two versions, and the distinction is Apple's. SHORT_VERSION is the marketing string
-# (CFBundleShortVersionString) — hand-bumped, dotted numbers only. VERSION is the build identity
-# (CFBundleVersion, and -X main.version) — git describe, so a bug report names an exact commit.
-SHORT_VERSION="0.1.0"
+# (CFBundleShortVersionString) — dotted numbers only; hand-bumped locally, or set from the git tag by
+# the release workflow via GOTAB_SHORT_VERSION (.github/workflows/release.yml, D42). VERSION is the
+# build identity (CFBundleVersion, and -X main.version) — git describe, so a bug report names an
+# exact commit.
+SHORT_VERSION="${GOTAB_SHORT_VERSION:-0.1.0}"
 VERSION="$(git describe --tags --always --dirty 2>/dev/null || echo "0.0.0-dev")"
 OUT="build/${APP_NAME}.app"
 

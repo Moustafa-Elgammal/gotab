@@ -1467,3 +1467,46 @@ there is no per-tile `NSView` for AppKit to expose. The shape that fell out:
 wall P3.1's screenshot (V6.2/V6.3) and V6.1's keypress hit. A human runs VoiceOver against
 `gotab -switch` and `gotab -settings` and confirms each tile is announced with title + app, the
 selection is spoken on every ⌥⇥ cycle, and every settings control has a spoken label.
+
+---
+
+## D42 · CI/CD: releases are cut by a tag, and the update feed is GitHub Pages — 2026-09-08
+
+P5.3 left `FeedURL` pointing at `https://gotab.app/appcast/latest.json`, a host that never existed
+(D39), and there was no release process at all. Both are now GitHub infrastructure, so nothing new
+has to be paid for or operated.
+
+- **A `v*` tag is the entire trigger.** `git tag -a v0.2.0 -m "…" && git push origin v0.2.0` starts
+  `.github/workflows/release.yml`: run the gate, `build.sh`, `ditto`-zip the `.app`, `gh release
+  create` with the zip + its SHA-256, render `latest.json`, deploy Pages. No "create the release in
+  the UI first" step — the tag is the input and the commit it points at is the provenance.
+- **One build path, not two.** The workflow calls the same `scripts/build.sh` a developer runs;
+  there is no CI-only build. Its one concession is `SHORT_VERSION="${GOTAB_SHORT_VERSION:-0.1.0}"`,
+  so the tag drives `CFBundleShortVersionString` while `git describe --tags` (now reachable —
+  `fetch-depth: 0` on checkout) drives `CFBundleVersion` and `-X main.version`. `parseVersion`
+  already strips the leading `v`.
+- **The manifest is rendered from the checked-in template.** `resources/appcast/latest.json` stops
+  being a stale example and becomes the file the workflow reads: `jq` overrides `version` / `url` /
+  `notes` (the last from the annotated tag's subject line) and leaves `min_macos` — the single
+  source of truth for the manifest's OS floor stays in the repo, next to `build.sh`'s `MIN_MACOS`.
+- **Pages via `actions/deploy-pages`, no `gh-pages` branch.** Source = "GitHub Actions"; the
+  `release` job uploads a `_site/` artifact (the manifest plus a one-line `index.html` so the root
+  isn't a 404) and a separate `deploy-pages` job publishes it. Separate on purpose: a first tag
+  pushed before the repo is public — or before the Pages source is switched — still produces a
+  usable Release, and only the Pages step needs re-running.
+- **`FeedURL` → `https://moustafa-elgammal.github.io/gotab/latest.json`.** Inert until the repo is
+  public and Pages is enabled, which is the same "placeholder until a host exists" status D39
+  recorded — only now the host is concrete and V6.11 has something real to run against.
+- **First-party actions only.** `actions/checkout`, `actions/setup-go`, `actions/upload-pages-artifact`,
+  `actions/deploy-pages`, and the preinstalled `gh` CLI. No `softprops/action-gh-release`, no
+  `peaceiris/actions-gh-pages` — the project vendors nothing (D39, ARCHITECTURE.md) and that applies
+  to the pipeline too.
+
+**Still out of scope, and still gated on an Apple Developer account:** notarization / Developer ID
+signing, and in-app download + verify + relaunch. The attached zip is ad-hoc signed (D38), so a
+downloader on another machine needs a right-click → Open. A notarization step in the workflow is the
+fix and is a separate future task, not a V6 row. `BUNDLE_ID` stays `app.gotab` — renaming it now
+orphans the CFPreferences domain and the TCC grants (D34).
+
+**assumption → V6.12 / V6.11:** the pipeline has not run — the repo is private, Pages is off, and
+there are no tags. V6.12 is the row for "it runs once, end to end"; V6.11 then becomes runnable.
