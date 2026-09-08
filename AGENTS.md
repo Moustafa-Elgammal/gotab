@@ -83,6 +83,12 @@ A wrong comment costs several times more than a missing one. Write for low drift
 
 - **A task is done only when `docs/ROADMAP.md` is updated in the same commit.** That file is how a cold
   session learns where things stand; skipping it is how this project gets lost.
+- **When the status changes, the website changes with it.** `docs/ROADMAP.md` is the source of truth;
+  its status is mirrored in two places that must move in the same commit whenever a phase closes, a
+  release is cut, or an on-device verification (V6.x) lands or shifts: `README.md`'s status line, and
+  `docs/site/index.html` — its hero `status-note` and, at release time, the version pill and the
+  example zip name. The site is served on the owner's domain (`https://elgx.me/gotab/`) and copied
+  into the Pages artifact by `release.yml`; a stale status line there misrepresents the project.
 - **Don't write tests alongside the work — ever (D16, generalised in D23).** A task in any phase is
   done when the code is written and `scripts/check.sh` is still green. **All verification lands in the
   final phase**, which is Phase 6 today and is whatever the last phase is if more are added; a new
